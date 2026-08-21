@@ -13,7 +13,14 @@ def has_permission(doc, ptype, user=None):
 		return True
 
 	user = user or frappe.session.user
-	if "System Manager" in frappe.get_roles(user) or user == "Administrator":
+	roles = frappe.get_roles(user)
+	if "System Manager" in roles or user == "Administrator":
+		return None
+
+	# The integration user is assigned this role explicitly. Returning None
+	# delegates the final decision to Role Permissions Manager instead of
+	# overriding its configured Create/Delete permissions.
+	if "Mobile app" in roles:
 		return None
 
 	if ptype == "create":
