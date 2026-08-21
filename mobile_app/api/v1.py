@@ -138,9 +138,9 @@ def users_sync():
 		if frappe.db.exists("Mobile App User", name):
 			doc = frappe.get_doc("Mobile App User", name)
 			doc.update({k: v for k, v in fields.items() if k not in ("doctype", "external_id") and v is not None})
-			doc.save()
+			doc.save(ignore_permissions=True)
 		else:
-			doc = frappe.get_doc(fields).insert()
+			doc = frappe.get_doc(fields).insert(ignore_permissions=True)
 	return _ok(_mobile_app_user_api_payload(doc), 200)
 
 
@@ -191,7 +191,7 @@ def users_full_sync():
 		_replace_child_table(doc, "health_entries", data.get("health_entries"))
 		_replace_child_table(doc, "appointments", data.get("appointments"))
 		_replace_child_table(doc, "engagement_items", data.get("engagement_items"))
-		doc.save()
+		doc.save(ignore_permissions=True)
 		sync_appointments_from_user(doc)
 
 	return _ok(_mobile_app_user_api_payload(doc), 200)

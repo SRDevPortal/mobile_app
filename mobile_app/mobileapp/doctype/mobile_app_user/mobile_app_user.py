@@ -7,6 +7,11 @@ from frappe.model.document import Document
 
 def has_permission(doc, ptype, user=None):
 	"""Patients are created via mobile/API only — not manually in Desk (except System Manager)."""
+	# Trusted server-side API operations validate X-ERP-Token before setting this
+	# request-local flag. Honour it while keeping manual Desk creation blocked.
+	if frappe.flags.get("ignore_permissions"):
+		return True
+
 	user = user or frappe.session.user
 	if "System Manager" in frappe.get_roles(user) or user == "Administrator":
 		return None
