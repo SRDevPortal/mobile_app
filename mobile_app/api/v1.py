@@ -7,6 +7,8 @@ All mobile data now lives under `Mobile App User` and its child tables.
 from __future__ import annotations
 
 import re
+import hashlib
+import time
 from contextlib import contextmanager
 from typing import Any
 
@@ -24,6 +26,26 @@ def ignore_permissions():
 		yield
 	finally:
 		frappe.flags.ignore_permissions = prev
+
+
+def _user_lock_name(identity: str) -> str:
+	"""Return a bounded, non-sensitive MariaDB advisory-lock name."""
+	digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+	return f"mobile_app_user:{digest}"
+
+
+@contextmanager
+def user_operation_lock(identity: str, timeout_seconds: int = 10):
+	"""Serialize provisioning, full sync and erasure for one mobile user."""
+	lock_name = _user_lock_name(identity)
+	acquired = frappe.db.sql("SELECT GET_LOCK(%s, %s)", (lock_name, timeout_seconds))[0][0]
+	if acquired != 1:
+		frappe.local.response.http_status_code = 409
+		frappe.throw(_("Another operation is in progress for this user. Please retry."))
+	try:
+		yield
+	finally:
+		frappe.db.sql("SELECT RELEASE_LOCK(%s)", (lock_name,))
 
 
 def _parse_body() -> dict[str, Any]:
@@ -202,7 +224,7 @@ def users_sync():
 		"is_active": 1 if data.get("is_active", True) else 0,
 		"last_login_at": data.get("last_login_at"),
 	}
-	with ignore_permissions():
+	with user_operation_lock(name), ignore_permissions():
 		existing = _get_existing_user_name(data)
 		if existing:
 			doc = frappe.get_doc("Mobile App User", existing)
@@ -210,6 +232,8 @@ def users_sync():
 			doc.save(ignore_permissions=True)
 		else:
 			doc = frappe.get_doc(fields).insert(ignore_permissions=True)
+		# The advisory lock must cover the database commit, not just doc.save().
+		frappe.db.commit()
 	return _ok(_mobile_app_user_api_payload(doc), 200)
 
 
@@ -247,7 +271,7 @@ def users_full_sync():
 		"last_login_at": data.get("last_login_at"),
 	}
 
-	with ignore_permissions():
+	with user_operation_lock(name), ignore_permissions():
 		existing = _get_existing_user_name(data)
 		if existing:
 			doc = frappe.get_doc("Mobile App User", existing)
@@ -263,5 +287,69 @@ def users_full_sync():
 		_replace_child_table(doc, "engagement_items", data.get("engagement_items"))
 		doc.save(ignore_permissions=True)
 		sync_appointments_from_user(doc)
+		frappe.db.commit()
 
 	return _ok(_mobile_app_user_api_payload(doc), 200)
+
+
+_STANDALONE_USER_DOCTYPES = (
+	"Mobile App Notification",
+	"App Support Ticket",
+	"Mobile App Appointment",
+	"Mobile App Prescription",
+	"Mobile App Health Entry",
+	"Mobile App User Disease Selection",
+	"Mobile App User Profile",
+	"Mobile App User Session",
+)
+
+
+def _is_lock_timeout(exc: Exception) -> bool:
+	message = str(exc).lower()
+	return "1205" in message or "lock wait timeout" in message
+
+
+def _delete_standalone_user_rows(user_name: str) -> dict[str, int]:
+	deleted: dict[str, int] = {}
+	for doctype in _STANDALONE_USER_DOCTYPES:
+		if not frappe.db.exists("DocType", doctype):
+			continue
+		meta = frappe.get_meta(doctype)
+		link_field = "user_id" if meta.has_field("user_id") else "mobile_app_user" if meta.has_field("mobile_app_user") else None
+		if not link_field:
+			continue
+		names = frappe.get_all(doctype, filters={link_field: user_name}, pluck="name")
+		for docname in names:
+			frappe.delete_doc(doctype, docname, ignore_permissions=True)
+		deleted[doctype] = len(names)
+	return deleted
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def users_delete():
+	"""Idempotently erase one ERP user in a serialized, retryable transaction."""
+	require_app_token()
+	data = _parse_body()
+	identity = _resolve_user_external_id(data)
+	if not identity:
+		_err(_("external_id or supabase_user_id is required"))
+
+	for attempt in range(3):
+		try:
+			with user_operation_lock(identity), ignore_permissions():
+				user_name = _find_user_name(data)
+				if not user_name:
+					frappe.db.commit()
+					return _ok({"already_deleted": True, "deleted": {}}, 200)
+				deleted = _delete_standalone_user_rows(user_name)
+				frappe.delete_doc("Mobile App User", user_name, ignore_permissions=True)
+				deleted["Mobile App User"] = 1
+				frappe.db.commit()
+				return _ok({"already_deleted": False, "deleted": deleted}, 200)
+		except Exception as exc:
+			frappe.db.rollback()
+			if not _is_lock_timeout(exc) or attempt == 2:
+				raise
+			time.sleep(0.25 * (2**attempt))
+
+	_err(_("Unable to delete user"), 500)
