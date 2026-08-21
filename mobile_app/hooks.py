@@ -26,18 +26,20 @@ app_license = "mit"
 
 # include js, css files in header of desk.html
 app_include_css = [
-	"/assets/mobile_app/css/mobile_app_clinical.css",
+	"/assets/mobile_app/css/mobile_app_clinical.css?v=20260525_dashboard_blank_fix",
 	"/assets/mobile_app/css/doctor_clinical.css",
 ]
 app_include_js = [
 	"/assets/mobile_app/js/doctor_clinical_guard.js",
 	"/assets/mobile_app/js/mobile_app_desk_utils.js",
+	"/assets/mobile_app/js/mobile_app_workspace.js?v=20260525_dashboard_blank_fix",
 ]
 # app_include_js = "/assets/mobile_app/js/mobile_app.js"
 
 doctype_js = {
 	"Mobile App User": [
 		"public/js/mobile_app_clinical_ui.js",
+		"public/js/mobile_app_support_ticket_ui.js",
 		"public/js/mobile_app_user_form.js",
 	],
 	"Mobile App Appointment": "public/js/mobile_app_appointment.js",
@@ -46,6 +48,7 @@ doctype_js = {
 doctype_list_js = {
 	"Mobile App User": "public/js/mobile_app_user_list.js",
 	"Mobile App Appointment": "public/js/mobile_app_appointment_list.js",
+	"App Support Ticket": "public/js/app_support_ticket_list.js",
 }
 
 has_permission = {
@@ -271,4 +274,3 @@ permission_query_conditions = {
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
-

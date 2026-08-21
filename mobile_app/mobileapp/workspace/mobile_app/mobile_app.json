@@ -1,6 +1,6 @@
 {
  "charts": [],
- "content": "[{\"id\":\"ma_header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">Mobile App</span>\",\"col\":12}},{\"id\":\"ma_s0\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Doctor Clinical Portal\",\"col\":4}},{\"id\":\"ma_s1\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Mobile App User\",\"col\":4}},{\"id\":\"ma_s2\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Mobile App Appointment\",\"col\":4}}]",
+ "content": "[{\"id\":\"ma_header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4 ma-workspace-title\\\">Mobile App</span>\",\"col\":12}},{\"id\":\"ma_s0\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Mobile App User\",\"col\":3}},{\"id\":\"ma_s1\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Mobile App Appointments\",\"col\":3}},{\"id\":\"ma_s2\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Support Tickets\",\"col\":3}},{\"id\":\"ma_s3\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Doctor Clinical Portal\",\"col\":3}}]",
  "creation": "2026-05-15 18:39:05.542694",
  "custom_blocks": [],
  "docstatus": 0,
@@ -23,13 +23,6 @@
  "sequence_id": 0.0,
  "shortcuts": [
   {
-   "color": "Green",
-   "doc_view": "",
-   "label": "Doctor Clinical Portal",
-   "link_to": "doctor-clinical",
-   "type": "Page"
-  },
-  {
    "color": "Blue",
    "doc_view": "",
    "label": "Mobile App User",
@@ -39,9 +32,23 @@
   {
    "color": "Green",
    "doc_view": "List",
-   "label": "Mobile App Appointment",
+   "label": "Mobile App Appointments",
    "link_to": "Mobile App Appointment",
    "type": "DocType"
+  },
+  {
+   "color": "Orange",
+   "doc_view": "List",
+   "label": "Support Tickets",
+   "link_to": "App Support Ticket",
+   "type": "DocType"
+  },
+  {
+   "color": "Green",
+   "doc_view": "",
+   "label": "Doctor Clinical Portal",
+   "link_to": "doctor-clinical",
+   "type": "Page"
   }
  ],
  "title": "Mobile App"

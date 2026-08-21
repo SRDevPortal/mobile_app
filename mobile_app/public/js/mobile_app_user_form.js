@@ -59,8 +59,90 @@ function setup_sidebar(frm) {
 }
 
 function setup_clinical_ui(frm) {
-	if (frm.is_new() || !mobile_app.clinical_ui) return;
-	mobile_app.clinical_ui.setup(frm);
+	if (frm.is_new()) return;
+	if (mobile_app.clinical_ui) {
+		mobile_app.clinical_ui.setup(frm);
+		return;
+	}
+
+	setTimeout(() => {
+		if (!frm.is_new() && mobile_app.clinical_ui) {
+			mobile_app.clinical_ui.setup(frm);
+		}
+	}, 250);
+}
+
+function get_profile_display_name(frm) {
+	if (mobile_app.clinical_ui?.get_patient_display_name) {
+		return mobile_app.clinical_ui.get_patient_display_name(frm);
+	}
+	const profile = (frm.doc.profiles || [])[0] || null;
+	return (
+		profile?.profile_name ||
+		frm.doc.full_name ||
+		[frm.doc.first_name, frm.doc.last_name].filter(Boolean).join(" ") ||
+		frm.docname
+	);
+}
+
+function apply_profile_display_name(frm) {
+	const display_name = get_profile_display_name(frm);
+	if (!display_name || display_name === frm.docname) return;
+
+	if (frm.doc.full_name !== display_name) {
+		frm.doc.full_name = display_name;
+		frm.fields_dict.full_name?.set_value(display_name);
+		frm.refresh_field("full_name");
+	}
+
+	if (frm.page?.set_title) {
+		frm.page.set_title(display_name);
+	}
+
+	frm.$wrapper
+		.closest(".page-container")
+		.find(".page-title .title-text")
+		.first()
+		.text(display_name);
+}
+
+function clear_clinical_header(frm) {
+	frm.$wrapper?.find(".ma-clinical-header-mount").remove();
+}
+
+function setup_support_ticket_ui(frm) {
+	if (frm.is_new() || !mobile_app.support_ticket_ui) return;
+	mobile_app.support_ticket_ui.setup(frm);
+}
+
+function open_routed_support_ticket_chat(frm) {
+	const opts = frappe.route_options || {};
+	if (!opts.open_support_ticket_chat) return;
+
+	const ticket_name = opts.support_ticket_name;
+	delete opts.open_support_ticket_chat;
+	delete opts.support_ticket_name;
+
+	frm._ma_active_ticket_name = ticket_name || null;
+
+	setTimeout(() => {
+		const tab = frm.fields_dict.support_ticket_workspace?.tab;
+		if (tab?.set_active) {
+			tab.set_active();
+		} else {
+			frm.$wrapper
+				.find('.form-tabs .nav-link[data-fieldname="support_ticket_tab"]')
+				.trigger("click");
+		}
+
+		setup_support_ticket_ui(frm);
+		setTimeout(() => {
+			const $mount = frm.$wrapper.find(".ma-support-inbox-mount").first();
+			if ($mount.length) {
+				$mount[0].scrollIntoView({ behavior: "smooth", block: "start" });
+			}
+		}, 350);
+	}, 120);
 }
 
 frappe.ui.form.on("Mobile App User", {
@@ -76,6 +158,7 @@ frappe.ui.form.on("Mobile App User", {
 		clear_live_poll(frm);
 
 		if (frm.is_new()) {
+			clear_clinical_header(frm);
 			mobile_app.desk?.block_new_patient_route?.(frm);
 			return;
 		}
@@ -84,9 +167,12 @@ frappe.ui.form.on("Mobile App User", {
 			mobile_app.desk.apply_doctor_desk_restrictions(frm);
 		}
 
+		apply_profile_display_name(frm);
 		start_live_poll(frm);
 		setup_sidebar(frm);
 		setup_clinical_ui(frm);
+		setup_support_ticket_ui(frm);
+		open_routed_support_ticket_chat(frm);
 	},
 
 	medical_tab(frm) {
@@ -105,7 +191,14 @@ frappe.ui.form.on("Mobile App User", {
 		}, 80);
 	},
 
+	support_ticket_tab(frm) {
+		setTimeout(() => {
+			setup_support_ticket_ui(frm);
+		}, 80);
+	},
+
 	after_save(frm) {
+		apply_profile_display_name(frm);
 		setup_clinical_ui(frm);
 	},
 });

@@ -1,4 +1,4 @@
-/* Mobile App User list — doctors must not create patients manually */
+/* Mobile App User list - doctors must not create patients manually */
 
 frappe.listview_settings["Mobile App User"] = {
 	onload(listview) {

@@ -24,11 +24,28 @@ def has_permission(doc, ptype, user=None):
 
 
 class MobileAppUser(Document):
+	def validate(self):
+		self._sync_name_from_primary_profile()
+
 	def on_update(self):
 		self._ensure_profile_image_public()
 
 	def after_insert(self):
 		self._ensure_profile_image_public()
+
+	def _sync_name_from_primary_profile(self):
+		if not self.profiles:
+			return
+
+		profile_name = (self.profiles[0].profile_name or "").strip()
+		if not profile_name:
+			return
+
+		self.full_name = profile_name
+		if not self.first_name:
+			self.first_name = profile_name.split(" ", 1)[0]
+		if not self.last_name and " " in profile_name:
+			self.last_name = profile_name.split(" ", 1)[1]
 
 	def _ensure_profile_image_public(self):
 		"""Profile photos must be public so mobile/web clients can load them without auth."""

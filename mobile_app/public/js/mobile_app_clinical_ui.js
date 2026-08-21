@@ -181,6 +181,16 @@ function get_primary_profile(frm) {
 	return (frm.doc.profiles || [])[0] || null;
 }
 
+mobile_app.clinical_ui.get_patient_display_name = function (frm) {
+	const profile = get_primary_profile(frm);
+	return (
+		profile?.profile_name ||
+		frm.doc.full_name ||
+		[frm.doc.first_name, frm.doc.last_name].filter(Boolean).join(" ") ||
+		frm.docname
+	);
+};
+
 function calc_bmi(profile) {
 	if (!profile) return null;
 	const h = Number(profile.height);
@@ -197,9 +207,10 @@ function section_wrapper(frm, section_fieldname) {
 	return f.$wrapper.closest(".form-section");
 }
 
-function append_vital_card($grid, label, value, modifier) {
+function append_vital_card($grid, label, value, modifier, layout) {
 	const $card = $('<div class="ma-vital-card"></div>');
 	if (modifier) $card.addClass(`ma-vital-card--${modifier}`);
+	if (layout) $card.addClass(`ma-vital-card--span-${layout}`);
 	$card.append($('<div class="ma-vital-card__label"></div>').text(label));
 	const $val = $('<div class="ma-vital-card__value"></div>').text(value);
 	if (modifier === "email") $val.attr("title", value);
@@ -210,59 +221,74 @@ function append_vital_card($grid, label, value, modifier) {
 mobile_app.clinical_ui.render_patient_header = function (frm) {
 	frm.$wrapper.find(".ma-clinical-header-mount").remove();
 	const profile = get_primary_profile(frm);
+	const display_name = mobile_app.clinical_ui.get_patient_display_name(frm);
 	const $mount = $('<div class="ma-clinical-header-mount"></div>');
 	const $header = $('<div class="ma-clinical-header"></div>');
 
 	const $top = $('<div class="ma-clinical-header__top"></div>');
-	const $left = $("<div></div>");
-	$left.append(
-		$('<h2 class="ma-clinical-header__name"></h2>').text(frm.doc.full_name || frm.docname)
+	const $left = $('<div class="ma-clinical-header__identity"></div>');
+	const $nameRow = $('<div class="ma-clinical-header__name-row"></div>');
+	const disease = profile?.disease || "—";
+	$nameRow.append(
+		$('<h2 class="ma-clinical-header__name"></h2>').text(display_name)
 	);
-	$left.append(
-		$('<p class="ma-clinical-header__meta"></p>').text(
-			`${__("Patient chart")} · ID ${frm.doc.external_id || frm.docname}`
+	$left.append($nameRow);
+	const $meta = $('<p class="ma-clinical-header__meta"></p>');
+	$meta.append(`${__("Patient ID")}: `);
+	$meta.append(
+		$('<span class="ma-value-tag ma-value-tag--inline"></span>').text(
+			frm.doc.external_id || frm.docname
 		)
 	);
+	$left.append($meta);
 
-	const $chips = $('<div class="ma-clinical-chips"></div>');
-	const disease = profile?.disease || "—";
+	const $statusRow = $('<div class="ma-clinical-header__status-row"></div>');
+	if (disease && disease !== "—") {
+		$statusRow.append($('<span class="ma-chip ma-chip--accent"></span>').text(disease));
+	}
+	if (frm.doc.is_active) {
+		const $active = $('<span class="ma-chip ma-chip--active"></span>');
+		$active.append($('<span class="ma-chip__dot" aria-hidden="true"></span>'));
+		$active.append(document.createTextNode(__("Active")));
+		$statusRow.append($active);
+	} else {
+		$statusRow.append($('<span class="ma-chip ma-chip--warn"></span>').text(__("Inactive")));
+	}
+
 	const age = profile?.age != null ? `${profile.age} yrs` : "—";
 	const gender = profile?.gender || "—";
-	$chips.append($('<span class="ma-chip ma-chip--accent"></span>').text(disease));
-	$chips.append($('<span class="ma-chip"></span>').text(gender));
-	$chips.append($('<span class="ma-chip"></span>').text(age));
-	$chips.append(
-		$('<span class="ma-chip"></span>')
-			.toggleClass("ma-chip--warn", !frm.doc.is_active)
-			.text(frm.doc.is_active ? __("Active") : __("Inactive"))
-	);
+	$top.append($left).append($statusRow);
 
-	$top.append($left).append($chips);
-
-	const $grid = $('<div class="ma-vitals-grid"></div>');
 	const phone = frm.doc.phone || profile?.phone || "—";
 	const email = frm.doc.email || profile?.email || "—";
-	append_vital_card($grid, __("Phone"), phone, "phone");
-	append_vital_card($grid, __("Email"), email, "email");
+	const $vitals = $('<div class="ma-vitals-rows"></div>');
+
+	append_vital_card($vitals, __("Phone"), phone, "phone", "half");
+	append_vital_card($vitals, __("Email"), email, "email", "half");
+	append_vital_card($vitals, __("Gender"), gender, null, "fifth");
+	append_vital_card($vitals, __("Age"), age, null, "fifth");
 	append_vital_card(
-		$grid,
+		$vitals,
 		__("Height"),
-		profile?.height != null ? `${profile.height} cm` : "—"
+		profile?.height != null ? `${profile.height} cm` : "—",
+		null,
+		"fifth"
 	);
 	append_vital_card(
-		$grid,
+		$vitals,
 		__("Weight"),
-		profile?.weight != null ? `${profile.weight} kg` : "—"
+		profile?.weight != null ? `${profile.weight} kg` : "—",
+		null,
+		"fifth"
 	);
-	append_vital_card($grid, __("BMI"), calc_bmi(profile) || "—");
 	append_vital_card(
-		$grid,
+		$vitals,
 		__("Clinical logs"),
 		String((frm.doc.health_entries || []).length),
-		"count"
+		"count",
+		"fifth"
 	);
-
-	$header.append($top).append($grid);
+	$header.append($top).append($vitals);
 	$mount.append($header);
 
 	const $layout = frm.$wrapper.find(".form-layout").first();

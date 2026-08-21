@@ -17,7 +17,12 @@ LEGACY_DOCTYPES = (
 
 
 def execute():
-	"""Retire old standalone doctypes after moving to single-doctype architecture."""
+	"""Keep legacy doctypes/data intact on live sites.
+
+	Older builds used this patch to delete retired DocTypes after migration. The
+	final mobile_app package must be safe to deploy over existing live data, so
+	this patch is intentionally non-destructive.
+	"""
 	for dt in LEGACY_DOCTYPES:
 		if frappe.db.exists("DocType", dt):
-			frappe.delete_doc("DocType", dt, force=1, ignore_missing=True)
+			frappe.logger("mobile_app").info("Keeping legacy DocType during migration: %s", dt)

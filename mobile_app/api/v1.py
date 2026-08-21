@@ -6,6 +6,7 @@ All mobile data now lives under `Mobile App User` and its child tables.
 
 from __future__ import annotations
 
+import re
 from contextlib import contextmanager
 from typing import Any
 
@@ -63,6 +64,72 @@ def _mobile_app_user_api_payload(doc) -> dict[str, Any]:
 	return data
 
 
+_INVALID_NAME_CHARS = re.compile(r"[<>]")
+
+# Frappe meta keys echoed by clients; child row `name` must not be reused on sync.
+_CHILD_ROW_META_KEYS = frozenset(
+	{
+		"name",
+		"owner",
+		"creation",
+		"modified",
+		"modified_by",
+		"parent",
+		"parentfield",
+		"parenttype",
+		"idx",
+		"docstatus",
+		"doctype",
+	}
+)
+
+
+_USER_ID_KEYS = ("supabase_user_id", "id", "customer_id", "external_id")
+
+
+def _sanitize_frappe_name(value: Any) -> str:
+	"""Make a value safe for Frappe document names (strips < and >)."""
+	if value is None:
+		return ""
+	name = str(value).strip()
+	if not name:
+		return ""
+	return _INVALID_NAME_CHARS.sub("", name).strip()
+
+
+def _resolve_user_external_id(data: dict[str, Any]) -> str:
+	"""Pick a Frappe-safe document name; prefer UUID fields over email-style ids."""
+	unsafe: list[str] = []
+	for key in _USER_ID_KEYS:
+		raw = data.get(key)
+		if raw is None or raw == "":
+			continue
+		stripped = str(raw).strip()
+		if not stripped:
+			continue
+		if not _INVALID_NAME_CHARS.search(stripped):
+			return stripped
+		unsafe.append(stripped)
+
+	for raw in unsafe:
+		sanitized = _sanitize_frappe_name(raw)
+		if sanitized:
+			return sanitized
+	return ""
+
+
+def _get_existing_user_name(data: dict[str, Any]) -> str | None:
+	"""Resolve id and find an existing Mobile App User if present."""
+	name = _resolve_user_external_id(data)
+	if name and frappe.db.exists("Mobile App User", name):
+		return name
+	return _find_user_name(data)
+
+
+def _clean_child_row(row: dict[str, Any]) -> dict[str, Any]:
+	return {k: v for k, v in row.items() if k not in _CHILD_ROW_META_KEYS}
+
+
 def _replace_child_table(doc, fieldname: str, rows: list[dict[str, Any]] | None) -> None:
 	if rows is None:
 		return
@@ -71,16 +138,17 @@ def _replace_child_table(doc, fieldname: str, rows: list[dict[str, Any]] | None)
 	doc.set(fieldname, [])
 	for row in rows:
 		if isinstance(row, dict):
-			doc.append(fieldname, row)
+			doc.append(fieldname, _clean_child_row(row))
 
 
 def _find_user_name(p: dict[str, Any]) -> str | None:
-	if p.get("external_id") and frappe.db.exists("Mobile App User", p["external_id"]):
-		return p["external_id"]
-	if p.get("id") and frappe.db.exists("Mobile App User", p["id"]):
-		return p["id"]
-	if p.get("customer_id") and frappe.db.exists("Mobile App User", p["customer_id"]):
-		return p["customer_id"]
+	for key in _USER_ID_KEYS:
+		raw = p.get(key)
+		if not raw:
+			continue
+		for candidate in (str(raw).strip(), _sanitize_frappe_name(raw)):
+			if candidate and frappe.db.exists("Mobile App User", candidate):
+				return candidate
 	for field in ("supabase_user_id", "email", "phone"):
 		if p.get(field):
 			name = frappe.db.get_value("Mobile App User", {field: p[field]}, "name")
@@ -118,7 +186,7 @@ def users_sync():
 	"""Backward-compatible basic upsert for the single parent doctype."""
 	require_app_token()
 	data = _parse_body()
-	name = data.get("external_id")
+	name = _resolve_user_external_id(data)
 	if not name:
 		_err(_("external_id is required"))
 
@@ -135,8 +203,9 @@ def users_sync():
 		"last_login_at": data.get("last_login_at"),
 	}
 	with ignore_permissions():
-		if frappe.db.exists("Mobile App User", name):
-			doc = frappe.get_doc("Mobile App User", name)
+		existing = _get_existing_user_name(data)
+		if existing:
+			doc = frappe.get_doc("Mobile App User", existing)
 			doc.update({k: v for k, v in fields.items() if k not in ("doctype", "external_id") and v is not None})
 			doc.save(ignore_permissions=True)
 		else:
@@ -161,7 +230,7 @@ def users_full_sync():
 	"""Single endpoint for user + all tabbed child-table data."""
 	require_app_token()
 	data = _parse_body()
-	name = data.get("external_id")
+	name = _resolve_user_external_id(data)
 	if not name:
 		_err(_("external_id is required"))
 
@@ -179,8 +248,9 @@ def users_full_sync():
 	}
 
 	with ignore_permissions():
-		if frappe.db.exists("Mobile App User", name):
-			doc = frappe.get_doc("Mobile App User", name)
+		existing = _get_existing_user_name(data)
+		if existing:
+			doc = frappe.get_doc("Mobile App User", existing)
 			doc.update({k: v for k, v in fields.items() if k not in ("doctype", "external_id") and v is not None})
 		else:
 			doc = frappe.get_doc(fields)
