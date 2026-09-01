@@ -294,7 +294,6 @@ def users_full_sync():
 
 _STANDALONE_USER_DOCTYPES = (
 	"Mobile App Notification",
-	"App Support Ticket",
 	"Mobile App Appointment",
 	"Mobile App Prescription",
 	"Mobile App Health Entry",

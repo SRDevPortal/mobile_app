@@ -36,12 +36,12 @@
 			key: "tickets",
 			title: "Support Tickets",
 			metric: "--",
-			doctype: "App Support Ticket",
+			doctype: "Support Ticket",
 			accent: "purple",
 			icon: "ticket",
 			footer_label: "Active Tickets",
 			footer_value: "--",
-			route: ["List", "App Support Ticket"],
+			route: ["List", "Support Ticket"],
 		},
 		{
 			key: "portal",
@@ -298,7 +298,7 @@
 			.then((count) => set_footer("appointments", count))
 			.catch(() => set_footer("appointments", "--"));
 
-		get_count("App Support Ticket", [["App Support Ticket", "status", "not in", ["Closed", "Resolved"]]])
+		get_count("Support Ticket", [["Support Ticket", "status", "not in", ["Closed", "Resolved"]]])
 			.then((count) => set_footer("tickets", count))
 			.catch(() => set_footer("tickets", "--"));
 	}
