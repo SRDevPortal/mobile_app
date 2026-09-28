@@ -1,0 +1,123 @@
+{
+ "doctype": "DocType",
+ "name": "Mobile Appointment Workflow",
+ "module": "MobileApp",
+ "engine": "InnoDB",
+ "autoname": "field:appointment_key",
+ "field_order": [
+  "appointment_key",
+  "reference_doctype",
+  "reference_name",
+  "workflow_status",
+  "assigned_agent",
+  "duration_minutes",
+  "decision_by",
+  "decision_at",
+  "decision_reason",
+  "checked_in_at",
+  "consultation_started_at",
+  "checked_out_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "appointment_key",
+   "label": "Appointment Key",
+   "fieldtype": "Data",
+   "unique": 1,
+   "reqd": 1,
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "reference_doctype",
+   "fieldtype": "Link",
+   "options": "DocType",
+   "label": "Appointment Source",
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "reference_name",
+   "fieldtype": "Dynamic Link",
+   "options": "reference_doctype",
+   "label": "Appointment",
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "workflow_status",
+   "fieldtype": "Select",
+   "options": "Pending\nApproved\nCancelled\nChecked In",
+   "default": "Pending",
+   "label": "Queue Status",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "assigned_agent",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Assigned Agent",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "duration_minutes",
+   "fieldtype": "Int",
+   "label": "Duration (minutes)",
+   "default": "30",
+   "read_only": 1
+  },
+  {
+   "fieldname": "decision_by",
+   "fieldtype": "Link",
+   "label": "Decision By",
+   "read_only": 1,
+   "options": "User"
+  },
+  {
+   "fieldname": "decision_at",
+   "fieldtype": "Datetime",
+   "label": "Decision At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "decision_reason",
+   "fieldtype": "Small Text",
+   "label": "Decision Reason",
+   "read_only": 1
+  },
+  {
+   "fieldname": "checked_in_at",
+   "fieldtype": "Datetime",
+   "label": "Checked In At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "consultation_started_at",
+   "fieldtype": "Datetime",
+   "label": "Consultation Started At",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "checked_out_at",
+   "fieldtype": "Datetime",
+   "label": "Checked Out At",
+   "read_only": 1,
+   "hidden": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "report": 1
+  }
+ ],
+ "track_changes": 1,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "modified": "2026-09-25 18:19:01.452745"
+}

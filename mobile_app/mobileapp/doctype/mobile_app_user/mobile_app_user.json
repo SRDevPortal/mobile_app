@@ -45,7 +45,10 @@
         "appointments",
         "engagement_tab",
         "engagement_section",
-        "engagement_items"
+        "engagement_items",
+        "support_ticket_tab",
+        "support_ticket_section",
+        "support_ticket_workspace"
     ],
     "fields": [
         {
@@ -266,6 +269,22 @@
             "label": "Engagement Records",
             "fieldtype": "Table",
             "options": "Mobile App Engagement Item"
+        },
+        {
+            "fieldname": "support_ticket_tab",
+            "fieldtype": "Tab Break",
+            "label": "Support Ticket"
+        },
+        {
+            "fieldname": "support_ticket_section",
+            "fieldtype": "Section Break",
+            "label": "Support Tickets"
+        },
+        {
+            "fieldname": "support_ticket_workspace",
+            "fieldtype": "HTML",
+            "label": "Support Ticket Inbox",
+            "options": "<div class=\"ma-support-ticket-html-root\"></div>"
         }
     ],
     "image_field": "image",

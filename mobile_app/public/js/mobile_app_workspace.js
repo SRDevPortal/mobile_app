@@ -36,21 +36,21 @@
 			key: "tickets",
 			title: "Support Tickets",
 			metric: "--",
-			doctype: "Support Ticket",
+			doctype: "App Support Ticket",
 			accent: "purple",
 			icon: "ticket",
 			footer_label: "Active Tickets",
 			footer_value: "--",
-			route: ["List", "Support Ticket"],
+			route: ["List", "App Support Ticket"],
 		},
 		{
 			key: "portal",
-			title: "Doctor Clinical Portal",
-			metric: "10",
+			title: "Appointment Calendar",
+			metric: "Open",
 			accent: "orange",
 			icon: "play",
-			footer_label: "SLA Status",
-			footer_value: "100% Online",
+			footer_label: "Clinic schedule",
+			footer_value: "Day / Week / Month",
 			action_label: "See Details",
 			route: ["doctor-clinical"],
 		},
@@ -298,7 +298,7 @@
 			.then((count) => set_footer("appointments", count))
 			.catch(() => set_footer("appointments", "--"));
 
-		get_count("Support Ticket", [["Support Ticket", "status", "not in", ["Closed", "Resolved"]]])
+		get_count("App Support Ticket", [["App Support Ticket", "status", "not in", ["Closed", "Resolved"]]])
 			.then((count) => set_footer("tickets", count))
 			.catch(() => set_footer("tickets", "--"));
 	}

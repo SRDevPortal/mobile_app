@@ -1,639 +1,505 @@
-frappe.provide("mobile_app.doctor_clinical");
+/* Appointment operations calendar. Uses Frappe's bundled FullCalendar. */
+(() => {
+    const API = "mobile_app.api.appointment_calendar";
+    const esc = value => frappe.utils.escape_html(String(value == null ? "" : value));
+    const icon = name => frappe.utils.icon(name, "sm");
+    const colors = ["#ac579f", "#719925", "#4c89b3", "#df754b", "#7964bd", "#219f91"];
+    const labels = {approve: "Approve appointment", cancel: "Cancel appointment", check_in: "Check in", claim: "Take responsibility"};
+    const statusClass = value => String(value).toLowerCase().replaceAll(" ", "-");
+    const statusMark = status => {
+        const shapes = {
+            Pending: '<circle cx="8" cy="8" r="5.5"/><path d="M8 4.5V8l2.5 1.5"/>',
+            Approved: '<path d="m3 8 3 3 7-7"/>',
+            "Checked In": '<path d="m1 8 3 3 7-7M8 10l1 1 6-7"/>',
+            Cancelled: '<path d="m4 4 8 8M12 4l-8 8"/>',
+        };
+        return `<span class="ac-status-mark ${statusClass(status)}" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${shapes[status] || shapes.Pending}</svg></span>`;
+    };
+    const activeRoute = () => frappe.get_route()[0] === "doctor-clinical";
+    const zoomLevels = [50, 75, 100, 125, 150, 200];
 
-const API = "mobile_app.mobileapp.page.doctor_clinical.doctor_clinical";
-const CSS_PATH = "/assets/mobile_app/css/doctor_clinical.css";
-
-function format_apt_time(val) {
-	if (!val) return "";
-	const s = String(val).trim();
-	if (!s) return "";
-	if (s.includes(" ") || s.includes("T")) {
-		try {
-			return frappe.datetime.str_to_user(s);
-		} catch (e) {
-			/* fall through */
-		}
-	}
-	try {
-		return moment(s, ["HH:mm:ss", "HH:mm", "h:mm A"], true).format("hh:mm A");
-	} catch (e) {
-		return s;
-	}
-}
-
-function format_apt_date(val) {
-	if (!val) return "";
-	try {
-		return frappe.datetime.str_to_user(val);
-	} catch (e) {
-		return String(val);
-	}
-}
-
-function is_doctor_clinical_route(route) {
-	if (mobile_app.doctor_clinical.is_doctor_clinical_route) {
-		return mobile_app.doctor_clinical.is_doctor_clinical_route(route);
-	}
-	route = route || frappe.get_route() || [];
-	return route[0] === "doctor-clinical";
-}
-
-function teardown_doctor_portal() {
-	if (mobile_app.doctor_clinical.teardown_doctor_portal) {
-		mobile_app.doctor_clinical.teardown_doctor_portal();
-		return;
-	}
-	document.body.classList.remove("ma-doctor-portal-active");
-	document.body.removeAttribute("data-route");
-}
-
-function leave_doctor_portal() {
-	teardown_doctor_portal();
-}
-
-const NAV_ITEMS = [
-	{ id: "dashboard", icon: "es-line-home", title: __("Dashboard") },
-	{ id: "patients", icon: "es-line-users", title: __("Patients") },
-	{ id: "appointments", icon: "es-line-calendar", title: __("Appointments") },
-	{ id: "reports", icon: "es-line-file-text", title: __("Reports") },
-	{ id: "settings", icon: "es-line-settings", title: __("Settings") },
-];
-
-function nav_icon_html(icon_name) {
-	if (typeof frappe.utils.icon === "function") {
-		return frappe.utils.icon(icon_name, "md");
-	}
-	return `<span class="ma-nav-icon-fallback" aria-hidden="true">•</span>`;
-}
-
-frappe.pages["doctor-clinical"].on_page_load = function (wrapper) {
-	frappe.require(CSS_PATH, () => {
-		const portal = new mobile_app.doctor_clinical.DoctorClinicalPortal(wrapper);
-		mobile_app.doctor_clinical.portal = portal;
-		portal._route_key = "";
-		portal.on_route_change();
-	});
-};
-
-frappe.pages["doctor-clinical"].on_page_show = function () {
-	if (mobile_app.doctor_clinical.portal) {
-		mobile_app.doctor_clinical.portal._route_key = "";
-		mobile_app.doctor_clinical.portal.on_route_change();
-	}
-};
-
-frappe.pages["doctor-clinical"].on_page_hide = function () {
-	teardown_doctor_portal();
-};
-
-mobile_app.doctor_clinical.DoctorClinicalPortal = class DoctorClinicalPortal {
-	constructor(wrapper) {
-		this.wrapper = $(wrapper);
-		this.page = frappe.ui.make_app_page({
-			parent: wrapper,
-			title: __("Doctor Clinical"),
-			single_column: true,
-		});
-		this.$container = this.page.main;
-		this.active_nav = "dashboard";
-		this._route_key = "";
-		this.wrapper.bind("show", () => {
-			this._route_key = "";
-			this.on_route_change();
-		});
-	}
-
-	on_route_change() {
-		const route = frappe.get_route();
-		if (!is_doctor_clinical_route(route)) {
-			teardown_doctor_portal();
-			return;
-		}
-
-		const route_key = (route || []).join("/");
-		if (this._route_key === route_key && this.$content?.length) {
-			return;
-		}
-		this._route_key = route_key;
-
-		document.body.classList.add("ma-doctor-portal-active");
-		document.body.setAttribute(
-			"data-route",
-			(route || []).join("/")
-		);
-		this.ensure_branding().then(() => {
-			if (!is_doctor_clinical_route()) {
-				return;
-			}
-			if (route[1] === "appointment" && route[2]) {
-				this.active_nav = "appointments";
-				this.render_shell();
-				this.load_appointment_view(route[2]);
-			} else if (route[1] === "patients") {
-				this.active_nav = "patients";
-				this.render_shell();
-				this.load_patients_view();
-			} else {
-				this.active_nav = "dashboard";
-				this.render_shell();
-				this.load_dashboard();
-			}
-		});
-	}
-
-	ensure_branding() {
-		if (this._branding) {
-			return Promise.resolve(this._branding);
-		}
-		if (this._branding_promise) {
-			return this._branding_promise;
-		}
-		this._branding_promise = frappe
-			.xcall(`${API}.get_portal_branding`)
-			.then((data) => {
-				this._branding = data || {};
-				if (!this._branding.logo_url && frappe.boot?.app_logo_url) {
-					this._branding.logo_url = frappe.boot.app_logo_url;
-				}
-				return this._branding;
-			})
-			.catch(() => {
-				this._branding = { logo_url: frappe.boot?.app_logo_url || "" };
-				return this._branding;
-			});
-		return this._branding_promise;
-	}
-
-	render_sidebar_logo($sidebar) {
-		const logo_url = this._branding?.logo_url || frappe.boot?.app_logo_url || "";
-		const $logo = $('<a href="#" class="ma-portal__logo"></a>').attr(
-			"title",
-			this._branding?.company_name || __("Home")
-		);
-		if (logo_url) {
-			$logo.append(
-				$(
-					`<img class="ma-portal__logo-img" alt="" src="${frappe.utils.escape_html(logo_url)}" />`
-				)
-			);
-		} else {
-			$logo.append($('<span class="ma-portal__logo-fallback">+</span>'));
-		}
-		$logo.on("click", (e) => {
-			e.preventDefault();
-			frappe.set_route("doctor-clinical");
-		});
-		$sidebar.append($logo);
-	}
-
-	render_shell() {
-		const $portal = $('<div class="ma-portal"></div>');
-		const $sidebar = $('<aside class="ma-portal__sidebar"></aside>');
-		this.render_sidebar_logo($sidebar);
-
-		const $nav = $('<ul class="ma-portal__nav"></ul>');
-		NAV_ITEMS.forEach((item) => {
-			const $btn = $(`<button type="button" class="ma-portal__nav-btn" title="${item.title}"></button>`);
-			$btn.html(nav_icon_html(item.icon));
-			if (this.active_nav === item.id) {
-				$btn.addClass("is-active");
-			}
-			$btn.on("click", () => this.navigate(item.id));
-			$nav.append($('<li class="ma-portal__nav-item"></li>').append($btn));
-		});
-
-		$nav.append(
-			$('<li class="ma-portal__nav-item ma-portal__nav-item--logout"></li>').append(
-				$(`<button type="button" class="ma-portal__nav-btn" title="${__("Logout")}"></button>`)
-					.html(nav_icon_html("es-line-log-out"))
-					.on("click", () => frappe.app.logout())
-			)
-		);
-		$sidebar.append($nav);
-
-		const $main = $('<div class="ma-portal__main"></div>');
-		const $header = $('<header class="ma-portal__header"></header>');
-		this.$back = $(`<button type="button" class="ma-portal__back"></button>`);
-		this.$back
-			.html(`${nav_icon_html("es-line-arrow-left")} ${__("Back to dashboard")}`)
-			.on("click", () => frappe.set_route("doctor-clinical"));
-
-		const $headerRight = $('<div class="ma-portal__header-right"></div>');
-		$headerRight.append(
-			$('<span class="ma-portal__bell"></span>').html(nav_icon_html("es-line-bell"))
-		);
-		const $user = $('<div class="ma-portal__user"></div>');
-		this.$doctor_img = $('<img class="ma-portal__user-avatar" alt="" />');
-		this.$doctor_name = $('<span class="ma-portal__user-name"></span>');
-		$user.append(this.$doctor_img, this.$doctor_name, $('<span class="ma-portal__user-chevron">▼</span>'));
-		$headerRight.append($user);
-		$header.append(this.$back, $headerRight);
-
-		this.$content = $('<div class="ma-portal__content"></div>');
-		$main.append($header, this.$content);
-		$portal.append($sidebar, $main);
-
-		this.$container.empty().addClass("ma-portal-root").append($portal);
-		const boot_user = frappe.boot?.user || {};
-		this.set_doctor_header(
-			frappe.session.user_fullname || boot_user.fullname || frappe.session.user,
-			boot_user.image || boot_user.user_image
-		);
-	}
-
-	set_doctor_header(name, image) {
-		this.$doctor_name.text(name || __("Doctor"));
-		if (image) {
-			this.$doctor_img.attr("src", image).show();
-		} else {
-			this.$doctor_img.hide();
-		}
-	}
-
-	navigate(section) {
-		if (section === "dashboard") {
-			frappe.set_route("doctor-clinical");
-		} else if (section === "patients") {
-			frappe.set_route("doctor-clinical", "patients");
-		} else if (section === "appointments") {
-			leave_doctor_portal();
-			frappe.set_route("List", "Mobile App Appointment");
-		} else if (section === "reports") {
-			leave_doctor_portal();
-			frappe.set_route("List", "Mobile App User");
-		} else if (section === "settings") {
-			leave_doctor_portal();
-			frappe.set_route("Form", "User", frappe.session.user);
-		}
-	}
-
-	set_loading() {
-		this.$content.html(`<div class="ma-portal__loading">${__("Loading…")}</div>`);
-	}
-
-	load_dashboard() {
-		this.$back.hide();
-		this.set_loading();
-		frappe
-			.xcall(`${API}.get_dashboard`)
-			.then((data) => {
-				this.set_doctor_header(data.doctor_name, data.doctor_image);
-				this.render_dashboard(data);
-			})
-			.catch((e) => this.show_error(e));
-	}
-
-	render_dashboard(data) {
-		const today = data.today_appointments || [];
-		const upcoming = data.upcoming_appointments || [];
-
-		const $stats = $('<div class="ma-dash-grid"></div>');
-		$stats.append(this.stat_card(data.patient_count, __("Active patients")));
-		$stats.append(this.stat_card(today.length, __("Today's appointments")));
-		$stats.append(this.stat_card(upcoming.length, __("Upcoming")));
-
-		const $list = $('<div class="ma-appt-list"></div>');
-		$list.append(
-			$('<div class="ma-appt-list__head"></div>').text(
-				`${__("Today's appointments")} — ${data.today_label}`
-			)
-		);
-
-		if (!today.length) {
-			$list.append(
-				$('<div class="ma-empty-hint px-4 pb-3"></div>').text(
-					__("No appointments scheduled for today.")
-				)
-			);
-		} else {
-			today.forEach((apt) => $list.append(this.appointment_row(apt)));
-		}
-
-		this.$content.empty().append($('<h1 class="ma-portal__title"></h1>').text(__("Dashboard")));
-		this.$content.append($stats, $list);
-
-		if (upcoming.length) {
-			const $up = $('<div class="ma-appt-list mt-4"></div>');
-			$up.append($('<div class="ma-appt-list__head"></div>').text(__("Upcoming")));
-			upcoming.forEach((apt) => $up.append(this.appointment_row(apt, true)));
-			this.$content.append($up);
-		}
-	}
-
-	stat_card(value, label) {
-		return $('<div class="ma-dash-stat"></div>')
-			.append($('<div class="ma-dash-stat__value"></div>').text(String(value)))
-			.append($('<div class="ma-dash-stat__label"></div>').text(label));
-	}
-
-	appointment_row(apt, show_date) {
-		const time = apt.display_time || format_apt_time(apt.appointment_time);
-		const date = apt.display_date || format_apt_date(apt.appointment_date);
-		const meta = show_date
-			? `${date} ${time}`.trim()
-			: [time, apt.status].filter(Boolean).join(" · ");
-
-		const $row = $('<div class="ma-appt-row"></div>');
-		const $left = $("<div></div>");
-		$left.append($('<div class="ma-appt-row__name"></div>').text(apt.patient_name || "—"));
-		$left.append($('<div class="ma-appt-row__meta"></div>').text(meta));
-		$row.append($left);
-		if (apt.is_online) {
-			$row.append($('<span class="ma-appt-row__badge"></span>').text(__("Online")));
-		}
-		$row.on("click", () => frappe.set_route("doctor-clinical", "appointment", apt.name));
-		return $row;
-	}
-
-	load_patients_view() {
-		this.$back.show();
-		this.set_loading();
-		frappe
-			.xcall(`${API}.get_patients_list`, { limit: 50 })
-			.then((data) => this.render_patients(data.patients || []))
-			.catch((e) => this.show_error(e));
-	}
-
-	render_patients(patients) {
-		const $search = $('<input type="text" class="form-control ma-patients-search" />').attr(
-			"placeholder",
-			__("Search patients…")
-		);
-
-		const $list = $('<div class="ma-appt-list"></div>');
-		$list.append($('<div class="ma-appt-list__head"></div>').text(__("Patients")));
-
-		const render_rows = (rows) => {
-			$list.find(".ma-patient-list-item, .ma-empty-hint").remove();
-			if (!rows.length) {
-				$list.append(
-					$('<div class="ma-empty-hint px-4 pb-3"></div>').text(__("No patients found."))
-				);
-				return;
-			}
-			rows.forEach((p) => {
-				const $item = $('<div class="ma-patient-list-item"></div>');
-				if (p.image) {
-					$item.append(
-						$(
-							`<img class="ma-patient-list-item__avatar" src="${frappe.utils.escape_html(
-								p.image
-							)}" alt="" />`
-						)
-					);
-				} else {
-					const initials = (p.full_name || "?")
-						.split(" ")
-						.map((s) => s[0])
-						.join("")
-						.slice(0, 2)
-						.toUpperCase();
-					$item.append(
-						$('<div class="ma-patient-list-item__avatar"></div>')
-							.css({
-								display: "flex",
-								alignItems: "center",
-								justifyContent: "center",
-								fontWeight: 600,
-								color: "#0f4c54",
-							})
-							.text(initials)
-					);
-				}
-				const $text = $("<div></div>");
-				$text.append($('<div class="ma-appt-row__name"></div>').text(p.full_name || p.name));
-				$text.append(
-					$('<div class="ma-appt-row__meta"></div>').text(
-						[p.disease, p.gender, p.age != null ? `${p.age} yrs` : null]
-							.filter(Boolean)
-							.join(" · ")
-					)
-				);
-				$item.append($text);
-				$item.on("click", () => {
-					leave_doctor_portal();
-					frappe.set_route("Form", "Mobile App User", p.name);
-				});
-				$list.append($item);
-			});
-		};
-
-		render_rows(patients);
-
-		let timer;
-		$search.on("input", () => {
-			clearTimeout(timer);
-			timer = setTimeout(() => {
-				const q = $search.val();
-				frappe
-					.xcall(`${API}.get_patients_list`, { limit: 50, search: q || null })
-					.then((data) => render_rows(data.patients || []));
-			}, 300);
-		});
-
-		this.$content
-			.empty()
-			.append($('<h1 class="ma-portal__title"></h1>').text(__("Patients")))
-			.append($search, $list);
-	}
-
-	load_appointment_view(appointment_name) {
-		this.$back.show();
-		this.set_loading();
-		frappe
-			.xcall(`${API}.get_appointment_chart`, { appointment_name })
-			.then((data) => {
-				this.set_doctor_header(data.doctor_name, data.doctor_image);
-				this.render_appointment_view(data);
-			})
-			.catch((e) => this.show_error(e));
-	}
-
-	render_appointment_view(data) {
-		const p = data.patient;
-		const v = data.vitals;
-		const apt = data.appointment;
-
-		this.$content.empty();
-		this.$content.append(
-			$('<h1 class="ma-portal__title"></h1>').text(__("Current Appointment"))
-		);
-
-		if (apt.is_online && apt.google_meet_link) {
-			const $bar = $('<div class="ma-meet-bar"></div>');
-			$bar.append(
-				$(
-					`<a class="btn btn-primary btn-sm" target="_blank" rel="noopener">${__("Join Meeting")}</a>`
-				).attr("href", apt.google_meet_link)
-			);
-			$bar.append(
-				$(
-					`<button type="button" class="btn btn-default btn-sm">${__(
-						"Open appointment form"
-					)}</button>`
-				).on("click", () => {
-					leave_doctor_portal();
-					frappe.set_route("Form", "Mobile App Appointment", apt.name);
-				})
-			);
-			this.$content.append($bar);
-		}
-
-		const $grid = $('<div class="ma-chart-grid"></div>');
-		const $left = $("<div></div>");
-		const $right = $("<div></div>");
-
-		const $profile = $('<div class="ma-card ma-patient-card"></div>');
-		if (p.image) {
-			$profile.append(
-				$(`<img class="ma-patient-card__avatar" alt="" src="${frappe.utils.escape_html(p.image)}" />`)
-			);
-		} else {
-			const initials = (p.full_name || "?")
-				.split(" ")
-				.map((s) => s[0])
-				.join("")
-				.slice(0, 2)
-				.toUpperCase();
-			$profile.append($('<div class="ma-patient-card__initials"></div>').text(initials));
-		}
-		$profile.append($('<h2 class="ma-patient-card__name"></h2>').text(p.full_name || "—"));
-		if (p.age != null) {
-			$profile.append(
-				$('<p class="ma-patient-card__age"></p>').text(`${__("Age")}: ${p.age}`)
-			);
-		}
-		const $update = $(`<a href="#" class="ma-btn-update">${__("Update")}</a>`);
-		$update.on("click", (e) => {
-			e.preventDefault();
-			leave_doctor_portal();
-			frappe.set_route("Form", "Mobile App User", p.name);
-		});
-		$profile.append($update);
-		$left.append($profile);
-
-		const $info = $('<div class="ma-card ma-info-card"></div>');
-		$info.append($('<h3 class="ma-info-card__title"></h3>').text(`${__("Information")}:`));
-		[
-			[__("Gender"), p.gender || "—"],
-			[__("Blood Type"), p.blood_type || "—"],
-			[__("Allergies"), p.allergies || "—"],
-			[__("Diseases"), p.diseases || "—"],
-			[__("Height"), p.height || "—"],
-			[__("Weight"), p.weight || "—"],
-			[__("Patient ID"), p.patient_id || "—"],
-			[__("Last Visit"), p.last_visit || "—"],
-		].forEach(([label, value]) => {
-			$info.append(
-				$('<div class="ma-info-row"></div>')
-					.append($('<span class="ma-info-row__label"></span>').text(label))
-					.append($('<span class="ma-info-row__value"></span>').text(String(value)))
-			);
-		});
-		$left.append($info);
-
-		const $vitals = $('<div class="ma-vitals-row"></div>');
-		$vitals.append(
-			this.vital_card(__("Heart Rate"), v.heart_rate, "ma-vital-mini__icon--heart", "♥")
-		);
-		$vitals.append(
-			this.vital_card(
-				__("Body Temperature"),
-				v.body_temperature,
-				"ma-vital-mini__icon--temp",
-				"🌡"
-			)
-		);
-		$vitals.append(
-			this.vital_card(__("Glucose"), v.glucose, "ma-vital-mini__icon--glucose", "💧")
-		);
-		$right.append($vitals);
-
-		const $reports = $('<div class="ma-card"></div>');
-		$reports.append($('<h3 class="ma-section-card__title"></h3>').text(__("Test Reports")));
-		const reports = data.test_reports || [];
-		if (!reports.length) {
-			$reports.append(
-				$('<p class="ma-empty-hint"></p>').text(
-					__("No test reports synced from the mobile app yet.")
-				)
-			);
-		} else {
-			reports.forEach((r) => {
-				const $item = $('<div class="ma-report-item"></div>');
-				$item.append($('<div class="ma-report-item__icon"></div>').text("📄"));
-				const $text = $('<div class="ma-report-item__text"></div>');
-				let $title = $('<div class="ma-report-item__title"></div>').text(r.title);
-				if (r.file_url) {
-					$title = $(
-						`<a class="ma-report-item__title" href="${frappe.utils.escape_html(
-							r.file_url
-						)}" target="_blank" rel="noopener"></a>`
-					).text(r.title);
-				}
-				$text.append($title);
-				$text.append($('<div class="ma-report-item__date"></div>').text(r.date));
-				$item.append($text);
-				$reports.append($item);
-			});
-		}
-		$right.append($reports);
-
-		const $rx = $('<div class="ma-card"></div>');
-		$rx.append($('<h3 class="ma-section-card__title"></h3>').text(__("Prescriptions")));
-		$rx.append(
-			$(`<button type="button" class="ma-btn-add">+ ${__("Add a prescription")}</button>`).on(
-				"click",
-				() => {
-					leave_doctor_portal();
-					frappe.set_route("Form", "Mobile App User", p.name);
-				}
-			)
-		);
-		const rx_list = data.prescriptions || [];
-		if (!rx_list.length) {
-			$rx.append($('<p class="ma-empty-hint"></p>').text(__("No prescriptions on file yet.")));
-		} else {
-			const $table = $('<table class="ma-rx-table"><thead><tr></tr></thead><tbody></tbody></table>');
-			const $head = $table.find("thead tr");
-			$head.append($("<th></th>").text(__("Prescriptions")));
-			$head.append($("<th></th>").text(__("Date")));
-			$head.append($("<th></th>").text(__("Duration")));
-			const $tbody = $table.find("tbody");
-			rx_list.forEach((rx) => {
-				const $tr = $("<tr></tr>");
-				$tr.append(
-					$("<td></td>").append(
-						$('<div class="ma-rx-table__name"></div>')
-							.append($('<span class="ma-rx-table__pill-icon"></span>').text("Rx"))
-							.append(document.createTextNode(" " + rx.title))
-					)
-				);
-				$tr.append($("<td></td>").text(rx.date));
-				$tr.append($("<td></td>").text(rx.duration));
-				$tbody.append($tr);
-			});
-			$rx.append($table);
-		}
-		$right.append($rx);
-
-		$grid.append($left, $right);
-		this.$content.append($grid);
-	}
-
-	vital_card(label, value, icon_class, emoji) {
-		return $('<div class="ma-vital-mini"></div>')
-			.append($(`<div class="ma-vital-mini__icon ${icon_class}"></div>`).text(emoji))
-			.append($('<div class="ma-vital-mini__label"></div>').text(label))
-			.append($('<div class="ma-vital-mini__value"></div>').text(value || "—"));
-	}
-
-	show_error(err) {
-		const msg = err?.message || err || __("Unable to load clinical view.");
-		this.$content.html(
-			`<div class="ma-portal__loading text-danger">${frappe.utils.escape_html(
-				String(msg)
-			)}</div>`
-		);
-	}
-};
+    class AppointmentCalendar {
+        constructor(wrapper) {
+            this.wrapper = wrapper;
+            this.page = frappe.ui.make_app_page({parent: wrapper, title: __("Appointment Calendar"), single_column: true});
+            $(wrapper).addClass("ma-calendar-page");
+            this.storageKey = `appointment-calendar:view:v1:${frappe.session.user}`;
+            let saved;
+            try {
+                const value = JSON.parse(localStorage.getItem(this.storageKey));
+                if (value && typeof value.date === "string" && moment(value.date, "YYYY-MM-DD", true).isValid() &&
+                    ["agendaDay", "agendaWeek", "month", "appointmentRange"].includes(value.view)) saved = value;
+            } catch (e) { /* A blocked or invalid browser preference must not stop the calendar. */ }
+            this.date = moment(saved?.date || frappe.datetime.get_today());
+            this.viewName = saved?.view || "agendaWeek";
+            this.customRange = this.validDateRange(saved?.range?.from, saved?.range?.to) ? saved.range : null;
+            if (this.viewName === "appointmentRange" && !this.customRange) this.viewName = "agendaWeek";
+            this.zoom = zoomLevels.includes(saved?.zoom) ? saved.zoom : 100;
+            this.initialLookup = !saved;
+            this.doctor = ""; this.channel = "All"; this.queue = "All"; this.search = ""; this.rows = []; this.doctors = [];
+            this.request = 0; this.detailRequest = 0; this.colors = {};
+            this.canCreate = frappe.model.can_create("Patient Encounter");
+            this.render();
+            this.bind();
+            this.initCalendar();
+        }
+        rememberView() {
+            if (this.initialLookup) return;
+            try {
+                // Store view preferences only, never appointment or patient data.
+                localStorage.setItem(this.storageKey, JSON.stringify({date: this.date.format("YYYY-MM-DD"), view: this.viewName, zoom: this.zoom, range: this.customRange}));
+            } catch (e) { /* Navigation still works when browser storage is unavailable. */ }
+        }
+        button(action, text, cls = "", extra = "") {
+            return `<button type="button" class="ac-btn ${cls}" data-action="${action}" ${extra}>${text}</button>`;
+        }
+        render() {
+            this.$root = $(`<div class="ac-shell">
+                <nav class="ac-rail" aria-label="Clinic navigation">
+                    <span class="ac-brand" title="Clinic Calendar">${icon("calendar")}</span>
+                    <button class="ac-rail-link active" data-action="today" aria-label="Calendar">${icon("calendar")}</button>
+                    <button class="ac-rail-link" data-action="encounters" aria-label="Patient encounters">${icon("file")}</button>
+                    <button class="ac-rail-link" data-action="workspace" aria-label="Mobile app workspace">${icon("es-line-home")}</button>
+                </nav>
+                <main class="ac-main">
+                    <header class="ac-topbar"><div><h1>Appointment Calendar</h1><span class="ac-subtitle">Bookings, approvals and patient queue</span></div>
+                        <div class="ac-top-actions"><input class="ac-search" type="search" aria-label="Search patient, mobile number, doctor or booking" placeholder="Patient, mobile, doctor or booking...">
+                        ${this.canCreate ? this.button("new", "New appointment", "ac-primary") : ""}
+                        ${this.button("refresh", icon("es-line-reload"), "ac-icon-btn", 'aria-label="Refresh appointments" title="Refresh"')}</div>
+                    </header>
+                    <div class="ac-toolbar"><div class="ac-toolbar-title">Calendar <span class="ac-timezone"></span></div>
+                        <div class="ac-date-controls">${this.button("prev", icon("es-line-left-chevron"), "ac-icon-btn", 'aria-label="Previous period"')}
+                        <strong class="ac-period"></strong>${this.button("next", icon("es-line-right-chevron"), "ac-icon-btn", 'aria-label="Next period"')}
+                        <input type="date" class="ac-calendar-date ac-queue-date" value="${this.date.format("YYYY-MM-DD")}" aria-label="Calendar date" title="Go to any date, including past appointments">
+                        ${this.button("today", "Today")}</div>
+                        <div class="ac-views" role="group" aria-label="Calendar view">${["Day", "Week", "Month", "Range"].map(v => this.button("view", v, v === "Week" ? "selected" : "", `data-view="${v}"`)).join("")}</div>
+                    </div>
+                    <div class="ac-range-controls" hidden>
+                        <label>From <input type="date" class="ac-range-from ac-queue-date" aria-label="Range start date"></label>
+                        <label>To <input type="date" class="ac-range-to ac-queue-date" aria-label="Range end date"></label>
+                        ${this.button("apply-range", "Apply range", "ac-primary")}
+                        <span class="ac-range-help">Up to 62 days, including both dates</span>
+                        <span class="ac-range-error" role="alert"></span>
+                    </div>
+                    <div class="ac-notice" role="status" aria-live="polite" hidden></div>
+                    <div class="ac-body"><aside class="ac-doctors"><h2>DOCTORS</h2><p class="ac-sidebar-note">Displayed appointments<br><small>Awaiting = not yet checked in</small></p><div class="ac-doctor-list"></div>
+                        <div class="ac-legend"><h2>APPOINTMENT STATUS</h2>${["Pending", "Approved", "Checked In", "Cancelled"].map(s => `<div>${statusMark(s)}${s}</div>`).join("")}</div>
+                        <p class="ac-sidebar-note">Select a doctor to filter the calendar. Select a booking to review it.</p>
+                    </aside><section class="ac-calendar-area" aria-label="Appointment calendar">
+                        <div class="ac-calendar-tools"><div class="ac-zoom" role="group" aria-label="Calendar time scale">
+                            <span>Time scale</span>
+                            ${this.button("zoom-out", "&minus;", "ac-icon-btn", 'aria-label="Zoom out calendar" title="Zoom out: see more hours"')}
+                            ${this.button("zoom-reset", `${this.zoom}%`, "ac-zoom-value", 'aria-label="Reset calendar zoom to 100 percent" title="Reset to 100%"')}
+                            ${this.button("zoom-in", "+", "ac-icon-btn", 'aria-label="Zoom in calendar" title="Zoom in: more appointment detail"')}
+                        </div><span class="ac-zoom-hint">Ctrl + scroll to zoom</span></div>
+                        <div class="ac-calendar"></div></section>
+                    <aside class="ac-panel" aria-label="Appointment details and patient queue"><div class="ac-queue-view"></div><div class="ac-detail-view" hidden></div></aside></div>
+                    <footer class="ac-footer"><span class="ac-update">Loading appointments?</span><span>Calendar times follow the clinic timezone &middot; Auto-refresh every 30 seconds</span></footer>
+                </main></div>`).appendTo(this.page.main.empty());
+            this.$cal = this.$root.find(".ac-calendar");
+            this.$cal[0].style.setProperty("--ac-slot-height", `${30 * this.zoom / 100}px`);
+        }
+        bind() {
+            // Frappe emits a wrapper hide event; it does not call on_page_hide.
+            $(this.wrapper).on("hide.appointment-calendar", () => this.hide());
+            this.$root[0].addEventListener("scroll", event => {
+                if (event.target.matches?.(".fc-time-grid-container") && activeRoute() &&
+                    !this.drawing && $(this.wrapper).is(":visible")) {
+                    this.calendarScroll = event.target.scrollTop;
+                }
+            }, true);
+            this.$cal[0].addEventListener("wheel", event => {
+                const scroller = event.target.closest?.(".fc-time-grid-container");
+                if (!event.ctrlKey || !scroller || this.viewName === "month") return;
+                event.preventDefault();
+                if (!event.deltaY) return;
+                // A trackpad gesture emits many small events. Limit zoom changes to discrete steps.
+                const now = performance.now();
+                if (now - (this.lastZoomWheel || 0) < 120) return;
+                this.lastZoomWheel = now;
+                this.changeZoom(event.deltaY < 0 ? 1 : -1, event.clientY - scroller.getBoundingClientRect().top);
+            }, {passive: false});
+            this.$root.on("click", "[data-action]", e => this.action($(e.currentTarget).data("action"), $(e.currentTarget)));
+            this.$root.on("click", "[data-doctor]", e => {this.doctor = $(e.currentTarget).attr("data-doctor"); this.refilter();});
+            this.$root.on("click", "[data-channel]", e => {this.channel = $(e.currentTarget).attr("data-channel"); this.refilter();});
+            this.$root.on("click", "[data-queue]", e => {this.queue = $(e.currentTarget).attr("data-queue"); this.refilter();});
+            this.$root.on("click", "[data-booking]", e => this.open(this.rows.find(r => r.id === $(e.currentTarget).attr("data-booking"))));
+            this.$root.find(".ac-search").on("input", e => {this.search = e.target.value.trim().toLowerCase(); this.refilter();});
+            this.$root.on("change", ".ac-calendar-date", e => {
+                if (!moment(e.target.value, "YYYY-MM-DD", true).isValid()) return;
+                this.initialLookup = false;
+                this.date = moment(e.target.value); this.close(); this.$cal.fullCalendar("gotoDate", this.date); this.renderQueue();
+            });
+            this.resize = () => {
+                if (!activeRoute()) return;
+                this.$cal.fullCalendar("option", "height", this.height());
+                if (window.innerWidth < 800 && this.$cal.fullCalendar("getView").name === "agendaWeek") {
+                    this.$cal.fullCalendar("changeView", "agendaDay", this.date.clone());
+                    this.$root.find(".ac-views .ac-btn").removeClass("selected");
+                    this.$root.find('[data-view="Day"]').addClass("selected");
+                }
+            };
+            window.addEventListener("resize", this.resize);
+        }
+        validDateRange(from, to) {
+            const start = moment(from, "YYYY-MM-DD", true), end = moment(to, "YYYY-MM-DD", true);
+            return typeof from === "string" && typeof to === "string" && start.isValid() && end.isValid() && end.diff(start, "days") >= 0 && end.diff(start, "days") < 62;
+        }
+        rangeGrid() {
+            const r = this.customRange;
+            return r ? {start: moment(r.from).startOf("isoWeek"), end: moment(r.to).startOf("isoWeek").add(1, "week")} : null;
+        }
+        applyRange(from, to) {
+            if (!this.validDateRange(from, to)) {
+                this.$root.find(".ac-range-error").text("Choose a valid range of 1 to 62 days; To must be on or after From.");
+                return;
+            }
+            this.customRange = {from, to}; this.date = moment(from); this.initialLookup = false;
+            this.$root.find(".ac-range-error").text("");
+            this.$root.find(".ac-range-from").val(from); this.$root.find(".ac-range-to").val(to);
+            this.close();
+            if (this.viewName === "appointmentRange") this.$cal.fullCalendar("option", "visibleRange", this.rangeGrid());
+            else this.$cal.fullCalendar("changeView", "appointmentRange", this.rangeGrid());
+            this.$cal.fullCalendar("option", "height", this.height());
+        }
+        height() { return Math.max(380, window.innerHeight - (this.viewName === "appointmentRange" ? 308 : 258)); }
+        renderZoom() {
+            const month = ["month", "appointmentRange"].includes(this.viewName);
+            this.$root.find('[data-action="zoom-out"]').prop("disabled", month || this.zoom === zoomLevels[0]);
+            this.$root.find('[data-action="zoom-in"]').prop("disabled", month || this.zoom === zoomLevels[zoomLevels.length - 1]);
+            this.$root.find('[data-action="zoom-reset"]').text(`${this.zoom}%`).prop("disabled", month);
+            this.$root.find(".ac-zoom-hint").text(month ? "Zoom available in Day / Week" : "Ctrl + scroll to zoom");
+        }
+        changeZoom(step, pointerOffset) {
+            if (this.viewName === "month") return;
+            const index = zoomLevels.indexOf(this.zoom);
+            const next = step === 0 ? 100 : zoomLevels[Math.max(0, Math.min(zoomLevels.length - 1, index + step))];
+            if (next === this.zoom) return;
+            const $scroll = this.$cal.find(".fc-time-grid-container");
+            const oldHeight = this.$cal.find(".fc-slats tr")[0]?.getBoundingClientRect().height;
+            if (!$scroll.length || !oldHeight) return;
+            const offset = pointerOffset == null ? $scroll.innerHeight() / 2 : Math.max(0, Math.min($scroll.innerHeight(), pointerOffset));
+            const anchor = ($scroll.scrollTop() + offset) / oldHeight;
+            this.zoom = next;
+            this.drawing = true;
+            this.$cal[0].style.setProperty("--ac-slot-height", `${30 * this.zoom / 100}px`);
+            // FullCalendar v3 must rebuild slot coordinates before positioning appointment blocks.
+            this.$cal.fullCalendar("render");
+            this.$cal.fullCalendar("rerenderEvents");
+            const newHeight = this.$cal.find(".fc-slats tr")[0]?.getBoundingClientRect().height;
+            $scroll.scrollTop(anchor * newHeight - offset);
+            this.calendarScroll = $scroll.scrollTop();
+            this.drawing = false;
+            this.renderZoom();
+            this.rememberView();
+        }
+        initCalendar() {
+            this.$cal.fullCalendar({
+                header: false, defaultView: window.innerWidth < 800 && this.viewName === "agendaWeek" ? "agendaDay" : this.viewName, defaultDate: this.date, firstDay: 1,
+                views: {appointmentRange: {type: "basic", columnFormat: "ddd"}},
+                visibleRange: this.rangeGrid(),
+                dayRender: (date, cell) => {
+                    if (this.customRange && (date.format("YYYY-MM-DD") < this.customRange.from || date.format("YYYY-MM-DD") > this.customRange.to)) cell.addClass("ac-outside-range");
+                },
+                height: this.height(), allDaySlot: false, nowIndicator: true, editable: false,
+                slotDuration: "00:15:00", slotLabelInterval: "00:30:00", scrollTime: "08:00:00",
+                timeFormat: "h:mm A", columnFormat: "ddd D MMM", displayEventEnd: false,
+                eventLimit: true, eventTextColor: "#fff", timezone: false,
+                lazyFetching: false,
+                viewRender: view => {
+                    this.viewName = view.name;
+                    this.renderZoom();
+                    const custom = view.name === "appointmentRange" && this.customRange;
+                    this.$root.toggleClass("ac-range-active", Boolean(custom));
+                    this.$root.find(".ac-range-controls").prop("hidden", !custom);
+                    this.$root.find(".ac-calendar-date").prop("hidden", Boolean(custom));
+                    if (custom) {
+                        this.$root.find(".ac-range-from").val(custom.from); this.$root.find(".ac-range-to").val(custom.to);
+                    }
+                    this.$root.find(".ac-period").text(custom ? `${moment(custom.from).format("D MMM YYYY")} - ${moment(custom.to).format("D MMM YYYY")}` : view.title);
+                    if (this.date.isBefore(view.start) || !this.date.isBefore(view.end)) this.date = this.$cal.fullCalendar("getDate").clone();
+                    const viewKey = `${view.name}:${custom ? custom.from : view.start.format("YYYY-MM-DD")}:${custom ? custom.to : view.end.format("YYYY-MM-DD")}`;
+                    if (this.viewKey !== viewKey) {
+                        this.viewKey = viewKey;
+                        this.scrolled = false; this.calendarScroll = null; this.close();
+                    }
+                    const label = {agendaDay:"Day", agendaWeek:"Week", month:"Month", appointmentRange:"Range"}[view.name];
+                    this.$root.find('[data-action="prev"]').attr({title: `Previous ${label.toLowerCase()}`, "aria-label": `Previous ${label.toLowerCase()}`});
+                    this.$root.find('[data-action="next"]').attr({title: `Next ${label.toLowerCase()}`, "aria-label": `Next ${label.toLowerCase()}`});
+                    this.$root.find(".ac-views .ac-btn").removeClass("selected").filter(`[data-view="${label}"]`).addClass("selected");
+                    this.range = custom ? {start: moment(custom.from), end: moment(custom.to).add(1, "day")} : {start: view.start.clone(), end: view.end.clone()};
+                    this.renderDoctors(); this.renderQueue();
+                    this.rememberView();
+                    this.fetch();
+                },
+                dayClick: date => {if (this.viewName === "appointmentRange" && (date.format("YYYY-MM-DD") < this.customRange.from || date.format("YYYY-MM-DD") > this.customRange.to)) return; this.initialLookup = false; this.date = date.clone(); this.renderQueue(); this.close();},
+                eventClick: event => {this.date = moment(event.record.date); this.open(event.record);},
+                eventRender: (event, element) => {
+                    if (!this.matches(event.record)) return false;
+                    element.attr({title: `${event.record.patient_name} | ${event.record.status}`, tabindex: 0, role: "button", "aria-label": `${event.record.patient_name}, ${event.record.status}, ${event.start.format("D MMM h:mm A")}`});
+                    element.on("keydown", e => {if (e.key === "Enter" || e.key === " ") {e.preventDefault(); this.open(event.record);}});
+                    element.addClass(`ac-event-${statusClass(event.record.status)}`);
+                    element.find(".fc-title").text(event.record.patient_name);
+                    element.find(".fc-content").append(`<span class="ac-event-status" title="${esc(event.record.status)}" data-status="${esc(event.record.status)}">${statusMark(event.record.status)}</span>`);
+                },
+            });
+        }
+        async fetch() {
+            if (!this.range || !activeRoute() || !$(this.wrapper).is(":visible")) return;
+            const {start, end} = this.range;
+            const serial = ++this.request;
+            this.$root.find('[data-action="refresh"]').prop("disabled", true).attr("aria-busy", "true");
+            this.$root.find(".ac-update").text("Refreshing appointments...");
+            try {
+                const data = await frappe.xcall(`${API}.get_calendar`, {start: start.format("YYYY-MM-DD"), end: end.format("YYYY-MM-DD")});
+                if (serial !== this.request || !activeRoute() || !$(this.wrapper).is(":visible")) return;
+                if (this.initialLookup && !(data.appointments || []).length) {
+                    // A first visit should not look empty when nearby permitted bookings exist.
+                    // Reuse the permission-scoped API; reception never sees pending bookings.
+                    const today = moment(frappe.datetime.get_today());
+                    let nearby;
+                    try {
+                        nearby = await frappe.xcall(`${API}.get_calendar`, {
+                            start: today.clone().subtract(31, "days").format("YYYY-MM-DD"),
+                            end: today.clone().add(31, "days").format("YYYY-MM-DD")
+                        });
+                    } catch (e) { /* Keep the successful current-period result if the optional lookup fails. */ }
+                    if (serial !== this.request || !activeRoute()) return;
+                    if (this.initialLookup) {
+                        const dates = [...new Set((nearby?.appointments || []).map(r => r.date).filter(Boolean))];
+                        dates.sort((a, b) => Math.abs(moment(a).diff(today, "days")) - Math.abs(moment(b).diff(today, "days")) || b.localeCompare(a));
+                        this.initialLookup = false;
+                        if (dates.length) {
+                            this.date = moment(dates[0]);
+                            this.rememberView();
+                            const samePeriod = !this.date.isBefore(start) && this.date.isBefore(end);
+                            this.$cal.fullCalendar("gotoDate", this.date);
+                            if (samePeriod) this.fetch();
+                            return;
+                        }
+                    }
+                }
+                this.initialLookup = false;
+                this.rows = data.appointments || []; this.doctors = data.doctors || []; this.canAssign = data.can_assign;
+                this.receptionOnly = Boolean(data.reception_only);
+                this.$root.find('[data-action="new"], [data-action="encounters"]').prop("hidden", this.receptionOnly);
+                this.$root.find(".ac-subtitle").text(this.receptionOnly ? "Approved appointments and completed check-ins" : "Bookings, approvals and patient queue");
+                if (this.receptionOnly && !["All", "Approved", "Checked In"].includes(this.queue)) this.queue = "All";
+                this.$root.find(".ac-timezone").text(data.timezone);
+                this.$root.find(".ac-notice").prop("hidden", true);
+                this.renderDoctors(); this.renderQueue();
+                const previousScroll = this.calendarScroll ?? this.$cal.find(".fc-time-grid-container").scrollTop();
+                this.drawing = true;
+                this.$cal.fullCalendar("removeEvents");
+                this.$cal.fullCalendar("renderEvents", this.events(), true);
+                const initialScroll = !this.scrolled;
+                this.scrolled = true;
+                setTimeout(() => {
+                    if (serial !== this.request || !activeRoute()) return;
+                    const rowHeight = this.$cal.find(".fc-slats tr")[0]?.getBoundingClientRect().height || 30;
+                    let scrollTop = previousScroll || 0;
+                    if (initialScroll) {
+                        const visible = this.filtered();
+                        const day = visible.filter(r => r.date === this.date.format("YYYY-MM-DD"));
+                        const times = (day.length ? day : visible).map(r => r.time).sort();
+                        const first = times.length ? moment(times[0], "HH:mm:ss") : null;
+                        const minutes = first ? Math.max(0, first.hours() * 60 + first.minutes() - 30) : 480;
+                        scrollTop = rowHeight * Math.floor(minutes / 15);
+                    }
+                    this.$cal.find(".fc-time-grid-container").scrollTop(scrollTop);
+                    this.calendarScroll = this.$cal.find(".fc-time-grid-container").scrollTop() ?? this.calendarScroll;
+                    this.drawing = false;
+                }, 50);
+                this.$root.find(".ac-update").text(`${this.rows.length} bookings in this period | Updated ${moment().format("h:mm A")}`);
+                if (this.selected && !this.mutating) this.open(this.selected, true);
+            } catch (e) {
+                if (serial !== this.request) return;
+                this.drawing = false;
+                // Keep the last successful data visible while a failed refresh can be retried.
+                this.$root.find(".ac-notice").text("Unable to load appointments. Check your access and use Refresh to retry.").prop("hidden", false);
+                this.$root.find(".ac-update").text("Refresh failed ? showing last loaded appointments");
+            } finally {
+                if (serial === this.request) this.$root.find('[data-action="refresh"]').prop("disabled", false).attr("aria-busy", "false");
+            }
+        }
+        color(id) {
+            if (!this.colors[id]) {
+                let hash = 0; for (const c of id) hash = ((hash << 5) - hash + c.charCodeAt(0)) | 0;
+                this.colors[id] = colors[Math.abs(hash) % colors.length];
+            }
+            return this.colors[id];
+        }
+        matches(r, includeQueue = true, includeDoctor = true) {
+            const stages = {Pending:"Pending", Approved:"Approved", Cancelled:"Cancelled", "Checked In":"Checked In"};
+            return (!this.range || (r.date >= this.range.start.format("YYYY-MM-DD") && r.date < this.range.end.format("YYYY-MM-DD"))) &&
+                (!includeDoctor || !this.doctor || r.doctor_id === this.doctor) &&
+                (!includeQueue || this.queue === "All" || r.status === stages[this.queue]) &&
+                (this.channel === "All" || (this.channel === "Online") === r.online) &&
+                this.matchesSearch(r);
+        }
+        matchesSearch(r) {
+            if (!this.search) return true;
+            const text = [r.patient_name, r.patient, r.phone, r.doctor_name, r.doctor_id,
+                r.name, r.booking_id, r.encounter, r.email, r.assigned_agent].filter(Boolean).join(" ").toLowerCase();
+            const query = this.search.replace(/\s+/g, " ").trim();
+            if (text.replace(/\s+/g, " ").includes(query)) return true;
+            // Compare phone digits independently of spaces, punctuation or country prefix.
+            if (!/^[+\d\s().-]+$/.test(query)) return false;
+            const digits = query.replace(/\D/g, "");
+            const phone = String(r.phone || "").replace(/\D/g, "");
+            return digits.length >= 3 && (phone.includes(digits) ||
+                (phone.length >= 10 && digits.endsWith(phone)));
+        }
+        filtered() { return this.rows.filter(r => this.matches(r)); }
+        events() {
+            return this.rows.map(r => {
+                const start = moment(`${r.date} ${r.time}`, "YYYY-MM-DD HH:mm:ss");
+                return {id: r.id, title: r.patient_name, start, end: start.clone().add(r.duration, "minutes"),
+                    color: this.color(r.doctor_id), record: r};
+            });
+        }
+        refilter() {
+            this.close(); this.renderDoctors(); this.renderQueue();
+            this.$cal.fullCalendar("rerenderEvents");
+        }
+        renderDoctors() {
+            const groups = new Map(this.doctors.map(d => [d.id, {name: d.name, count: 0, awaiting: 0}]));
+            this.rows.forEach(r => {
+                if (!groups.has(r.doctor_id)) groups.set(r.doctor_id, {name: r.doctor_name, count: 0, awaiting: 0});
+            });
+            if (this.doctor && !groups.has(this.doctor)) this.doctor = "";
+            this.filtered().forEach(r => {
+                const d = groups.get(r.doctor_id);
+                d.count++;
+                if (["Pending", "Approved"].includes(r.status)) d.awaiting++;
+            });
+            const total = [...groups.values()].reduce((sum, d) => sum + d.count, 0);
+            const awaiting = [...groups.values()].reduce((sum, d) => sum + d.awaiting, 0);
+            const counts = (count, waiting) => `<span class="ac-doctor-counts" title="${count} displayed appointments; ${waiting} awaiting check-in"><b class="ac-doctor-total">${count}</b><small><span class="ac-doctor-awaiting">${waiting}</span> awaiting</small></span>`;
+            this.$root.find(".ac-doctor-list").html(`<button class="ac-doctor ${!this.doctor ? "selected" : ""}" data-doctor=""><span>All doctors</span>${counts(total, awaiting)}</button>` +
+                [...groups].sort((a,b) => a[1].name.localeCompare(b[1].name)).map(([id,d]) => `<button class="ac-doctor ${this.doctor === id ? "selected" : ""}" data-doctor="${esc(id)}" title="${esc(d.name)}"><span class="ac-doctor-name"><i style="background:${this.color(id)}"></i>${esc(d.name)}</span>${counts(d.count, d.awaiting)}</button>`).join(""));
+        }
+        renderQueue() {
+            const day = this.date.format("YYYY-MM-DD");
+            this.$root.find(".ac-calendar-date").val(day);
+            this.rememberView();
+            const rows = this.rows.filter(r => this.matches(r, false)).sort((a,b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+            const statuses = {All: rows.length, Pending: rows.filter(r => r.status === "Pending").length,
+                Approved: rows.filter(r => r.status === "Approved").length,
+                "Checked In": rows.filter(r => r.status === "Checked In").length,
+                Cancelled: rows.filter(r => r.status === "Cancelled").length};
+            if (this.receptionOnly) { delete statuses.Pending; delete statuses.Cancelled; }
+            const map = {Pending:"Pending", Approved:"Approved", "Checked In":"Checked In", Cancelled:"Cancelled"};
+            const visible = rows.filter(r => this.queue === "All" || r.status === map[this.queue]);
+            this.$root.find(".ac-queue-view").html(`<div class="ac-counts">${Object.entries(statuses).map(([s,n]) => `<button data-queue="${s}" class="${this.queue === s ? "selected" : ""}"><span>${s}</span><b class="ac-count-${statusClass(s)}">${n}</b></button>`).join("")}</div>
+                <div class="ac-queue-list">${visible.length ? visible.map(r => `<button class="ac-booking" data-booking="${esc(r.id)}" style="border-left-color:${this.color(r.doctor_id)}"><time><span class="ac-booking-date">${moment(r.date).format("D MMM")}</span>${moment(r.time,"HH:mm:ss").format("h:mm A")}</time><div><strong>${esc(r.patient_name)}</strong><span>${esc(r.doctor_name)}</span><span class="ac-badge ${statusClass(r.status)}">${statusMark(r.status)}${esc(r.status)}</span><small>${r.online ? "Online" : "In clinic"}</small></div>${icon("es-line-right-chevron")}</button>`).join("") : `<div class="ac-empty"><div>${icon("calendar")}</div><strong>No appointments here</strong><p>Choose another date or clear your filters. New bookings appear automatically.</p></div>`}</div>`);
+        }
+        async open(record, quiet = false) {
+            if (!record) return;
+            this.date = moment(record.date);
+            this.initialLookup = false;
+            this.rememberView();
+            this.$root.find(".ac-calendar-date").val(this.date.format("YYYY-MM-DD"));
+            this.selected = record;
+            const serial = ++this.detailRequest;
+            if (!quiet) {
+                this.$root.find(".ac-queue-view").prop("hidden", true);
+                this.$root.find(".ac-detail-view").prop("hidden", false).html('<div class="ac-empty">Loading appointment...</div>');
+            }
+            try {
+                const data = await frappe.xcall(`${API}.get_appointment`, {doctype: record.source_doctype, name: record.name});
+                if (serial !== this.detailRequest || !this.selected) return;
+                this.selected = data; this.renderDetail(data);
+            } catch(e) {if (serial === this.detailRequest) {this.close(); frappe.show_alert({message: "Appointment unavailable. Refresh the calendar.", indicator: "orange"});}}
+        }
+        renderDetail(r) {
+            const field = (label, value) => value ? `<div class="ac-detail-field"><dt>${label}</dt><dd>${esc(value)}</dd></div>` : "";
+            const stamp = value => value ? moment(value).format("D MMM, h:mm A") : "";
+            // Keep historical consultation audit in the database, not the simplified appointment panel.
+            const history = (r.history || []).filter(h => !/Checked In \u2192 In Consultation|In Consultation \u2192 Completed/.test($('<div>').html(h.content).text()));
+            const meet = /^https:\/\/meet\.google\.com\//i.test(r.meet_link || "") ? `<a class="ac-btn" target="_blank" rel="noopener noreferrer" href="${esc(r.meet_link)}">Join video consultation</a>` : "";
+            this.$root.find(".ac-detail-view").html(`<div class="ac-detail-top">${this.button("close", `${icon("es-line-left-chevron")} Appointments`)}<span class="ac-badge ${statusClass(r.status)}">${statusMark(r.status)}${esc(r.status)}</span></div>
+                <div class="ac-patient-heading"><span class="ac-eyebrow">APPOINTMENT DETAILS</span><h2>${esc(r.patient_name)}</h2><p>${esc(moment(r.date).format("dddd, D MMMM"))} &middot; ${esc(moment(r.time,"HH:mm:ss").format("h:mm A"))}</p></div>
+                <div class="ac-detail-scroll"><dl>${field("Doctor",r.doctor_name)}${field("Appointment mode",r.online ? "Online" : "In clinic")}${field("Phone",r.phone)}${field("Email",r.email)}${field("Patient",r.patient)}${field("Booking",r.name)}${field("Assigned agent",r.assigned_agent || "Unassigned")}${field("Encounter",r.encounter)}${field("Notes",r.notes)}${field("Decision reason",r.reason)}${field("Decision by",r.decision_by)}${field("Decision time",stamp(r.decision_at))}${field("Checked in",stamp(r.checked_in_at))}</dl>
+                ${history.length ? `<details class="ac-history"><summary>Activity history</summary>${history.map(h => `<div><small>${esc(stamp(h.creation))} | ${esc(h.comment_by)}</small><p>${esc($('<div>').html(h.content).text())}</p></div>`).join("")}</details>` : ""}</div>
+                <div class="ac-detail-actions">${r.actions.map(a => this.button(a,labels[a],a === "cancel" ? "ac-danger" : "ac-primary")).join("")}${this.canAssign && !["Checked In","Cancelled"].includes(r.status) ? this.button("assign","Assign agent") : ""}${meet}${r.can_open_source ? this.button("source",r.encounter ? "Open Patient Encounter" : "Open booking record") : ""}${!r.actions.length && !["Checked In","Cancelled"].includes(r.status) ? '<p class="ac-muted">Actions are available to the responsible agent or assigned doctor.</p>' : ""}</div>`);
+        }
+        close() {this.selected = null; ++this.detailRequest; this.$root.find(".ac-detail-view").prop("hidden",true);this.$root.find(".ac-queue-view").prop("hidden",false);this.renderQueue();}
+        action(action, button) {
+            if (action === "apply-range") return this.applyRange(this.$root.find(".ac-range-from").val(), this.$root.find(".ac-range-to").val());
+            if (action === "view" && button.data("view") === "Range") {
+                const from = this.customRange?.from || this.range.start.format("YYYY-MM-DD");
+                const to = this.customRange?.to || this.range.end.clone().subtract(1, "day").format("YYYY-MM-DD");
+                return this.applyRange(from, to);
+            }
+            if (["prev", "next"].includes(action) && this.viewName === "appointmentRange") {
+                const days = (moment(this.customRange.to).diff(moment(this.customRange.from), "days") + 1) * (action === "next" ? 1 : -1);
+                return this.applyRange(moment(this.customRange.from).add(days, "days").format("YYYY-MM-DD"), moment(this.customRange.to).add(days, "days").format("YYYY-MM-DD"));
+            }
+            if (action === "today" && this.viewName === "appointmentRange") {
+                this.customRange = null; this.initialLookup = false; this.date = moment(frappe.datetime.get_today());
+                this.$cal.fullCalendar("changeView", "agendaWeek", this.date.clone());
+                this.$cal.fullCalendar("option", "height", this.height()); return;
+            }
+            if (action === "zoom-in") return this.changeZoom(1);
+            if (action === "zoom-out") return this.changeZoom(-1);
+            if (action === "zoom-reset") return this.changeZoom(0);
+            if (["prev", "next", "today", "view"].includes(action)) this.initialLookup = false;
+            if (["prev","next","today"].includes(action)) {
+                if (action === "today") this.date = moment(frappe.datetime.get_today());
+                this.close(); this.$cal.fullCalendar(action); this.renderQueue(); return;
+            }
+            if (action === "view") {this.customRange = null; const v = button.data("view");this.$root.find(".ac-views .ac-btn").removeClass("selected");button.addClass("selected");this.$cal.fullCalendar("changeView",{Day:"agendaDay",Week:"agendaWeek",Month:"month"}[v],this.date.clone());this.$cal.fullCalendar("option", "height", this.height());return;}
+            if (action === "refresh") return this.fetch();
+            if (action === "close") return this.close();
+            if (action === "workspace") return frappe.set_route("Workspaces","Mobile App");
+            if (action === "encounters") return frappe.set_route("List","Patient Encounter");
+            if (action === "new") return frappe.new_doc("Patient Encounter",{sr_encounter_type:"Appointment",pe_appointment_date:this.date.format("YYYY-MM-DD")});
+            if (action === "source") {
+                this.calendarScroll = this.$cal.find(".fc-time-grid-container").scrollTop() ?? this.calendarScroll;
+                return frappe.set_route("Form",this.selected.source_doctype,this.selected.name);
+            }
+            if (!this.selected || this.mutating) return;
+            if (action === "cancel") return frappe.prompt([{fieldname:"reason",label:"Reason for cancellation",fieldtype:"Small Text",reqd:1}],values => this.update(action,values),"Cancel appointment","Cancel appointment");
+            if (action === "assign") return frappe.prompt([{fieldname:"agent",label:"Responsible agent",fieldtype:"Link",options:"User",reqd:1,get_query:()=>({query:`${API}.agent_query`})}],values=>this.update(action,values),"Assign appointment","Assign");
+            this.update(action);
+        }
+        async update(action, values = {}) {
+            this.mutating = true;this.$root.find(".ac-detail-actions button").prop("disabled",true);
+            try {
+                const r = this.selected;
+                const result = await frappe.xcall(`${API}.update_appointment`,{doctype:r.source_doctype,name:r.name,action,expected_status:r.status,...values});
+                ++this.detailRequest;
+                this.rows = this.rows.map(row => row.id === result.id ? result : row);
+                this.selected = result;this.renderDetail(result);this.renderDoctors();this.renderQueue();frappe.show_alert({message:"Appointment updated",indicator:"green"});
+            } catch (error) { /* Frappe presents the server validation message. */ } finally {this.mutating = false;this.$root.find(".ac-detail-actions button").prop("disabled",false);this.fetch();}
+        }
+        show() {
+            document.body.classList.add("ma-calendar-active");
+            clearInterval(this.timer);this.timer = setInterval(()=>{if(activeRoute() && !document.hidden && !this.mutating) this.fetch();},30000);
+            clearTimeout(this.showTimer);
+            this.showTimer = setTimeout(() => {
+                if (!activeRoute()) return;
+                this.drawing = true;
+                this.$cal.fullCalendar("render");
+                if (this.calendarScroll != null) this.$cal.find(".fc-time-grid-container").scrollTop(this.calendarScroll);
+                this.drawing = false;
+                this.fetch();
+            }, 50);
+        }
+        hide() {
+            clearInterval(this.timer); clearTimeout(this.showTimer);
+            ++this.request; ++this.detailRequest;
+            this.drawing = false;
+            document.body.classList.remove("ma-calendar-active");
+        }
+    }
+    frappe.pages["doctor-clinical"].on_page_load = wrapper => {
+        frappe.require(["/assets/frappe/js/lib/fullcalendar/fullcalendar.min.css","/assets/frappe/js/lib/fullcalendar/fullcalendar.min.js","/assets/mobile_app/css/doctor_clinical.css"],()=>{
+            wrapper.appointment_calendar = new AppointmentCalendar(wrapper);
+            if(activeRoute()) wrapper.appointment_calendar.show();
+        });
+    };
+    frappe.pages["doctor-clinical"].on_page_show = wrapper => wrapper.appointment_calendar?.show();
+    frappe.pages["doctor-clinical"].on_page_hide = wrapper => wrapper.appointment_calendar?.hide();
+})();

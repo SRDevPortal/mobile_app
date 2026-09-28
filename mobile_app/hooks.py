@@ -5,6 +5,9 @@ app_description = "Mobile app data storage"
 app_email = "admin@example.com"
 app_license = "mit"
 
+after_install = "mobile_app.calendar_setup.after_migrate"
+after_migrate = "mobile_app.calendar_setup.after_migrate"
+
 # Apps
 # ------------------
 
@@ -39,6 +42,7 @@ app_include_js = [
 doctype_js = {
 	"Mobile App User": [
 		"public/js/mobile_app_clinical_ui.js",
+		"public/js/mobile_app_support_ticket_ui.js",
 		"public/js/mobile_app_user_form.js",
 	],
 	"Mobile App Appointment": "public/js/mobile_app_appointment.js",
@@ -47,6 +51,7 @@ doctype_js = {
 doctype_list_js = {
 	"Mobile App User": "public/js/mobile_app_user_list.js",
 	"Mobile App Appointment": "public/js/mobile_app_appointment_list.js",
+	"App Support Ticket": "public/js/app_support_ticket_list.js",
 }
 
 has_permission = {
@@ -272,3 +277,11 @@ permission_query_conditions = {
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
+
+# Appointment operations status is maintained independently of clinical/billing status.
+doc_events = {
+    "Patient Encounter": {
+        "before_validate": "mobile_app.api.appointment_calendar.sync_encounter_status",
+        "on_cancel": "mobile_app.api.appointment_calendar.sync_encounter_status",
+    }
+}

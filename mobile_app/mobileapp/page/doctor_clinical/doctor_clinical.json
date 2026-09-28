@@ -4,7 +4,7 @@
  "docstatus": 0,
  "doctype": "Page",
  "idx": 0,
- "modified": "2026-05-15 12:00:00.000000",
+ "modified": "2026-09-25 18:19:01.409052",
  "modified_by": "Administrator",
  "module": "MobileApp",
  "name": "doctor-clinical",
@@ -15,12 +15,30 @@
    "role": "System Manager"
   },
   {
+   "role": "Appointment Agent"
+  },
+  {
+   "role": "Agent"
+  },
+  {
+   "role": "Physician"
+  },
+  {
+   "role": "Healthcare Practitioner"
+  },
+  {
    "role": "Mobile App Doctor"
+  },
+  {
+   "role": "Appointment Manager"
+  },
+  {
+   "role": "Appointment Receptionist"
   }
  ],
  "script": null,
  "standard": "Yes",
  "style": null,
  "system_page": 0,
- "title": "Doctor Clinical"
+ "title": "Appointment Calendar"
 }

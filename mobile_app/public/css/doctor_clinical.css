@@ -1,623 +1,175 @@
-/* Doctor Clinical Portal — only while doctor-clinical route is active */
-
-body.ma-doctor-portal-active[data-route^="doctor-clinical"] .layout-side-section,
-body.ma-doctor-portal-active[data-route^="doctor-clinical"] .navbar.navbar-expand,
-body.ma-doctor-portal-active[data-route^="doctor-clinical"] header.navbar,
-body.ma-doctor-portal-active[data-route^="doctor-clinical"] .navbar,
-body.ma-doctor-portal-active[data-route^="doctor-clinical"] #navbar-breadcrumbs,
-body.ma-doctor-portal-active[data-route^="doctor-clinical"] .page-head {
-	display: none !important;
-}
-
-body.ma-doctor-portal-active[data-route^="doctor-clinical"] .layout-main-section-wrapper {
-	margin-left: 0 !important;
-}
-
-body.ma-doctor-portal-active[data-route^="doctor-clinical"] .layout-main-section:has(.ma-portal-root) {
-	padding: 0 !important;
-	background: #eef1f4;
-}
-
-.ma-portal {
-	display: flex;
-	min-height: calc(100vh - 60px);
-	font-family: var(--font-stack), "Inter", system-ui, sans-serif;
-	color: #2d3748;
-}
-
-.ma-portal__sidebar {
-	width: 72px;
-	flex-shrink: 0;
-	background: linear-gradient(180deg, #0f4c54 0%, #0a3d44 100%);
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	padding: 1.25rem 0;
-	box-shadow: 2px 0 12px rgba(0, 0, 0, 0.08);
-	z-index: 10;
-}
-
-.ma-portal__sidebar .ma-portal__nav {
-	display: flex;
-	flex-direction: column;
-	flex: 1;
-	min-height: 0;
-}
-
-.ma-portal__logo {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	width: 48px;
-	height: 48px;
-	margin-bottom: 1.5rem;
-	border-radius: 10px;
-	background: #fff;
-	padding: 4px;
-	text-decoration: none;
-	overflow: hidden;
-	flex-shrink: 0;
-}
-
-.ma-portal__logo-img {
-	width: 100%;
-	height: 100%;
-	object-fit: contain;
-	display: block;
-}
-
-.ma-portal__logo-fallback {
-	width: 40px;
-	height: 40px;
-	border-radius: 8px;
-	background: #3ecf8e;
-	color: #fff;
-	font-size: 1.35rem;
-	font-weight: 700;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-}
-
-.ma-portal__nav {
-	list-style: none;
-	margin: 0;
-	padding: 0;
-	width: 100%;
-	flex: 1;
-}
-
-.ma-portal__nav-item {
-	margin-bottom: 0.35rem;
-}
-
-.ma-portal__nav-btn {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	width: 100%;
-	height: 48px;
-	border: none;
-	background: transparent;
-	color: rgba(255, 255, 255, 0.75);
-	cursor: pointer;
-	transition: color 0.15s, background 0.15s;
-}
-
-.ma-portal__nav-btn .icon,
-.ma-portal__nav-btn svg {
-	width: 22px;
-	height: 22px;
-	stroke: currentColor;
-	fill: none;
-}
-
-.ma-portal__nav-btn use {
-	stroke: currentColor;
-}
-
-.ma-portal__nav-btn:hover,
-.ma-portal__nav-btn.is-active {
-	color: #fff;
-	background: rgba(255, 255, 255, 0.12);
-}
-
-.ma-portal__nav-btn.is-active {
-	box-shadow: inset 3px 0 0 #3ecf8e;
-}
-
-.ma-portal__nav-item--logout {
-	margin-top: auto;
-}
-
-.ma-portal__back .icon,
-.ma-portal__back svg,
-.ma-portal__bell .icon,
-.ma-portal__bell svg {
-	width: 16px;
-	height: 16px;
-	stroke: currentColor;
-	vertical-align: middle;
-}
-
-.ma-portal__back {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.35rem;
-}
-
-.ma-portal__main {
-	flex: 1;
-	display: flex;
-	flex-direction: column;
-	min-width: 0;
-}
-
-.ma-portal__header {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	padding: 1rem 2rem;
-	background: #eef1f4;
-}
-
-.ma-portal__back {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.35rem;
-	color: #64748b;
-	font-size: 0.9rem;
-	cursor: pointer;
-	border: none;
-	background: none;
-	padding: 0;
-}
-
-.ma-portal__back:hover {
-	color: #0f4c54;
-}
-
-.ma-portal__header-right {
-	display: flex;
-	align-items: center;
-	gap: 1.25rem;
-}
-
-.ma-portal__bell {
-	font-size: 1.1rem;
-	color: #94a3b8;
-}
-
-.ma-portal__user {
-	display: flex;
-	align-items: center;
-	gap: 0.65rem;
-}
-
-.ma-portal__user-avatar {
-	width: 38px;
-	height: 38px;
-	border-radius: 50%;
-	object-fit: cover;
-	background: #cbd5e1;
-}
-
-.ma-portal__user-name {
-	font-weight: 600;
-	font-size: 0.9rem;
-	color: #1e293b;
-}
-
-.ma-portal__user-chevron {
-	color: #94a3b8;
-	font-size: 0.75rem;
-}
-
-.ma-portal__content {
-	flex: 1;
-	padding: 0 2rem 2rem;
-	overflow-y: auto;
-}
-
-.ma-portal__title {
-	font-size: 1.75rem;
-	font-weight: 700;
-	color: #1e293b;
-	margin: 0 0 1.5rem;
-	letter-spacing: -0.02em;
-}
-
-.ma-dash-grid {
-	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-	gap: 1rem;
-	margin-bottom: 1.5rem;
-}
-
-.ma-dash-stat {
-	background: #fff;
-	border-radius: 12px;
-	padding: 1.25rem;
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-}
-
-.ma-dash-stat__value {
-	font-size: 1.75rem;
-	font-weight: 700;
-	color: #0f4c54;
-}
-
-.ma-dash-stat__label {
-	font-size: 0.8rem;
-	color: #64748b;
-	margin-top: 0.25rem;
-}
-
-.ma-appt-list {
-	background: #fff;
-	border-radius: 12px;
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-	overflow: hidden;
-}
-
-.ma-appt-list__head {
-	padding: 1rem 1.25rem;
-	border-bottom: 1px solid #e2e8f0;
-	font-weight: 600;
-	color: #1e293b;
-}
-
-.ma-appt-row {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	padding: 0.85rem 1.25rem;
-	border-bottom: 1px solid #f1f5f9;
-	cursor: pointer;
-	transition: background 0.12s;
-}
-
-.ma-appt-row:hover {
-	background: #f8fafc;
-}
-
-.ma-appt-row:last-child {
-	border-bottom: none;
-}
-
-.ma-appt-row__name {
-	font-weight: 600;
-	color: #1e293b;
-}
-
-.ma-appt-row__meta {
-	font-size: 0.8rem;
-	color: #64748b;
-}
-
-.ma-appt-row__badge {
-	font-size: 0.7rem;
-	padding: 0.2rem 0.5rem;
-	border-radius: 4px;
-	background: #e0f2f1;
-	color: #0f4c54;
-}
-
-.ma-chart-grid {
-	display: grid;
-	grid-template-columns: 320px 1fr;
-	gap: 1.5rem;
-	align-items: start;
-}
-
-@media (max-width: 1100px) {
-	.ma-chart-grid {
-		grid-template-columns: 1fr;
-	}
-}
-
-.ma-card {
-	background: #fff;
-	border-radius: 12px;
-	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-	padding: 1.5rem;
-	margin-bottom: 1.25rem;
-}
-
-.ma-card:last-child {
-	margin-bottom: 0;
-}
-
-.ma-patient-card {
-	text-align: center;
-	padding: 2rem 1.5rem 1.5rem;
-}
-
-.ma-patient-card__avatar {
-	width: 100px;
-	height: 100px;
-	border-radius: 50%;
-	object-fit: cover;
-	margin: 0 auto 1rem;
-	display: block;
-	background: linear-gradient(135deg, #c5e8eb, #94c5cc);
-}
-
-.ma-patient-card__initials {
-	width: 100px;
-	height: 100px;
-	border-radius: 50%;
-	margin: 0 auto 1rem;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	font-size: 2rem;
-	font-weight: 600;
-	color: #0f4c54;
-	background: linear-gradient(135deg, #c5e8eb, #94c5cc);
-}
-
-.ma-patient-card__name {
-	font-size: 1.15rem;
-	font-weight: 700;
-	color: #1e293b;
-	margin: 0 0 0.35rem;
-}
-
-.ma-patient-card__age {
-	font-size: 0.875rem;
-	color: #64748b;
-	margin: 0 0 1.25rem;
-}
-
-.ma-btn-update {
-	display: inline-block;
-	width: 100%;
-	max-width: 200px;
-	padding: 0.65rem 1.5rem;
-	background: #3ecf8e;
-	color: #fff !important;
-	border: none;
-	border-radius: 8px;
-	font-weight: 600;
-	font-size: 0.9rem;
-	cursor: pointer;
-	text-align: center;
-	text-decoration: none !important;
-}
-
-.ma-btn-update:hover {
-	background: #34b87a;
-	color: #fff;
-}
-
-.ma-info-card__title {
-	font-size: 0.95rem;
-	font-weight: 700;
-	color: #1e293b;
-	margin: 0 0 1rem;
-}
-
-.ma-info-row {
-	display: flex;
-	justify-content: space-between;
-	gap: 1rem;
-	padding: 0.45rem 0;
-	border-bottom: 1px solid #f1f5f9;
-	font-size: 0.85rem;
-}
-
-.ma-info-row:last-child {
-	border-bottom: none;
-}
-
-.ma-info-row__label {
-	color: #64748b;
-}
-
-.ma-info-row__value {
-	font-weight: 600;
-	color: #1e293b;
-	text-align: right;
-}
-
-.ma-vitals-row {
-	display: grid;
-	grid-template-columns: repeat(3, 1fr);
-	gap: 1rem;
-	margin-bottom: 1.25rem;
-}
-
-@media (max-width: 768px) {
-	.ma-vitals-row {
-		grid-template-columns: 1fr;
-	}
-}
-
-.ma-vital-mini {
-	background: #fff;
-	border-radius: 12px;
-	padding: 1.25rem 1rem;
-	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	text-align: center;
-}
-
-.ma-vital-mini__icon {
-	width: 44px;
-	height: 44px;
-	border-radius: 50%;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	font-size: 1.25rem;
-	margin-bottom: 0.65rem;
-}
-
-.ma-vital-mini__icon--heart {
-	background: #fee2e2;
-	color: #dc2626;
-}
-
-.ma-vital-mini__icon--temp {
-	background: #ffedd5;
-	color: #ea580c;
-}
-
-.ma-vital-mini__icon--glucose {
-	background: #fce7f3;
-	color: #db2777;
-}
-
-.ma-vital-mini__label {
-	font-size: 0.75rem;
-	color: #64748b;
-	margin-bottom: 0.25rem;
-}
-
-.ma-vital-mini__value {
-	font-size: 1.1rem;
-	font-weight: 700;
-	color: #1e293b;
-}
-
-.ma-section-card__title {
-	font-size: 1rem;
-	font-weight: 700;
-	color: #1e293b;
-	margin: 0 0 1rem;
-}
-
-.ma-report-item {
-	display: flex;
-	align-items: center;
-	gap: 0.75rem;
-	padding: 0.65rem 0;
-	border-bottom: 1px solid #f1f5f9;
-}
-
-.ma-report-item:last-child {
-	border-bottom: none;
-}
-
-.ma-report-item__icon {
-	width: 36px;
-	height: 36px;
-	border-radius: 8px;
-	background: #e0f2f1;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	flex-shrink: 0;
-}
-
-.ma-report-item__title {
-	font-weight: 600;
-	font-size: 0.875rem;
-	color: #1e293b;
-}
-
-.ma-report-item__date {
-	font-size: 0.75rem;
-	color: #94a3b8;
-}
-
-.ma-btn-add {
-	display: block;
-	width: 100%;
-	padding: 0.75rem;
-	margin-bottom: 1rem;
-	border: 2px dashed #3ecf8e;
-	border-radius: 8px;
-	background: transparent;
-	color: #3ecf8e;
-	font-weight: 600;
-	font-size: 0.875rem;
-	cursor: pointer;
-}
-
-.ma-rx-table {
-	width: 100%;
-	border-collapse: collapse;
-	font-size: 0.85rem;
-}
-
-.ma-rx-table th {
-	text-align: left;
-	padding: 0.5rem 0.75rem;
-	color: #94a3b8;
-	font-weight: 500;
-	font-size: 0.75rem;
-	border-bottom: 1px solid #e2e8f0;
-}
-
-.ma-rx-table td {
-	padding: 0.65rem 0.75rem;
-	border-bottom: 1px solid #f1f5f9;
-}
-
-.ma-rx-table__name {
-	display: flex;
-	align-items: center;
-	gap: 0.5rem;
-	font-weight: 600;
-}
-
-.ma-rx-table__pill-icon {
-	width: 28px;
-	height: 28px;
-	border-radius: 6px;
-	background: #ffedd5;
-	color: #ea580c;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	font-size: 0.75rem;
-}
-
-.ma-empty-hint {
-	color: #94a3b8;
-	font-size: 0.85rem;
-	padding: 0.5rem 0;
-}
-
-.ma-portal__loading {
-	text-align: center;
-	padding: 4rem;
-	color: #64748b;
-}
-
-.ma-meet-bar {
-	display: flex;
-	gap: 0.75rem;
-	margin-bottom: 1rem;
-	flex-wrap: wrap;
-}
-
-.ma-patients-search {
-	margin-bottom: 1rem;
-	max-width: 400px;
-}
-
-.ma-patient-list-item {
-	display: flex;
-	align-items: center;
-	gap: 1rem;
-	padding: 0.85rem 1.25rem;
-	border-bottom: 1px solid #f1f5f9;
-	cursor: pointer;
-}
-
-.ma-patient-list-item:hover {
-	background: #f8fafc;
-}
-
-.ma-patient-list-item__avatar {
-	width: 44px;
-	height: 44px;
-	border-radius: 50%;
-	object-fit: cover;
-	background: #e2e8f0;
-}
+/* Practo-inspired clinic calendar, scoped to the Doctor Clinical route. */
+body.ma-calendar-active .container.page-body {max-width:none;padding:0}
+.ma-calendar-page .page-head {display:none}
+.ma-calendar-page .layout-main-section {border:0;background:#fff;padding:0!important}
+.ma-calendar-page .layout-main-section-wrapper {margin:0}
+.ma-calendar-page .page-content {padding:0}
+.ma-calendar-page .row.layout-main {margin:0}
+.ma-calendar-page .layout-main > .col {padding:0}
+.ac-shell {display:flex;min-height:calc(100vh - 60px);color:#42434f;font-family:var(--font-stack),Arial,sans-serif;font-size:12px;background:#fff}
+.ac-shell *, .ac-shell *:before {box-sizing:border-box}
+.ac-shell [hidden] {display:none!important}
+.ac-rail {width:54px;flex-shrink:0;background:#303a8c;display:flex;align-items:center;flex-direction:column;padding:0 0 16px;gap:4px}
+.ac-brand {width:54px;height:65px;display:flex;align-items:center;justify-content:center;color:#fff;border-bottom:1px solid #ffffff30}
+.ac-rail .icon {--icon-stroke:#fff;--icon-fill:transparent;width:21px;height:21px}
+.ac-rail-link {height:48px;width:54px;border:0;background:transparent;color:#fff;cursor:pointer}
+.ac-rail-link:hover,.ac-rail-link.active {background:#4b53ad}
+.ac-main {min-width:0;flex:1;display:flex;flex-direction:column}
+.ac-topbar {min-height:66px;display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid #dedee5;gap:14px}
+.ac-topbar h1 {font-size:19px;font-weight:500;margin:0 0 3px;color:#343445}
+.ac-subtitle,.ac-muted {font-size:11px;color:#777b89}
+.ac-top-actions {display:flex;gap:8px;align-items:center}
+.ac-search {height:32px;border:1px solid #d4d5df;border-radius:3px;width:240px;padding:6px 10px;background:#f8f8fb;color:#333}
+.ac-btn {display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:30px;border:1px solid #c9cbd5;border-radius:3px;padding:5px 11px;background:#fff;color:#575865;cursor:pointer;font-size:12px;line-height:1.4;text-decoration:none}
+.ac-btn:hover {background:#f2f3f8;border-color:#a7a9ba;color:#333}
+.ac-btn:focus-visible,.ac-shell button:focus-visible,.ac-search:focus-visible {outline:2px solid #5558bc;outline-offset:2px}
+.ac-btn:disabled {opacity:.5;cursor:wait}
+.ac-btn.ac-primary {background:#414a9e;border-color:#414a9e;color:#fff}
+.ac-btn.ac-primary:hover {background:#303a86}
+.ac-btn.ac-danger {border-color:#ce7373;color:#af3232;background:#fff}
+.ac-icon-btn {width:30px;padding:4px}
+.ac-toolbar {display:flex;align-items:center;gap:16px;padding:10px 16px;min-height:52px;background:#f2f2f7;border-bottom:1px solid #dedee5}
+.ac-toolbar-title {font-size:17px;margin-right:auto;white-space:nowrap}
+.ac-timezone {font-size:10px;color:#828594;margin-left:8px}
+.ac-date-controls {display:flex;align-items:center;gap:9px}
+.ac-period {font-size:12px;font-weight:500;min-width:140px;text-align:center}
+.ac-views {display:flex}
+.ac-views .ac-btn {border-radius:0;margin-left:-1px;min-width:52px}
+.ac-views .ac-btn:first-child {border-radius:3px 0 0 3px}
+.ac-views .ac-btn:last-child {border-radius:0 3px 3px 0}
+.ac-views .selected {background:#81818f;color:#fff;border-color:#81818f}
+.ac-body {display:flex;flex:1;min-height:440px;min-width:0}
+.ac-doctors {width:200px;flex-shrink:0;background:#f4f4f8;border-right:1px solid #dddde5;padding:14px 0}
+.ac-doctors h2 {font-size:10px;font-weight:600;letter-spacing:.6px;padding:0 13px;margin:0 0 12px;color:#727582}
+.ac-doctor-list {max-height:42vh;overflow:auto}
+.ac-doctor {width:100%;display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 12px;background:transparent;border:0;text-align:left;color:#72737f;font-size:12px;cursor:pointer}
+.ac-doctor.selected {background:#82828f;color:#fff}
+.ac-doctor:hover:not(.selected) {background:#e6e6ef}
+.ac-doctor b {font-size:11px;font-weight:400}
+.ac-doctor-name {display:flex;align-items:center;gap:7px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ac-doctor-name i,.ac-status-dot {display:inline-block;width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.ac-legend {border-top:1px solid #dddde5;margin-top:22px;padding-top:15px}
+.ac-legend > div {display:flex;gap:8px;align-items:center;margin:10px 13px;color:#777b88;font-size:11px}
+.ac-status-dot.pending {background:#dea945}.ac-status-dot.approved {background:#6482bb}.ac-status-dot.checked-in {background:#e5784a}.ac-status-dot.in-consultation {background:#269773}.ac-status-dot.completed {background:#40adbf}.ac-status-dot.rejected {background:#c16969}
+.ac-sidebar-note {font-size:11px;color:#8b8d99;padding:18px 13px;line-height:1.7}
+.ac-calendar-area {min-width:0;flex:1;overflow:hidden;background:#fff}
+.ac-calendar .fc-toolbar {display:none}
+.ac-calendar .fc-view-container {background:#fff}
+.ac-calendar th {font-weight:400;color:#797d8b;font-size:10px;padding:14px 2px;text-transform:uppercase}
+.ac-calendar td,.ac-calendar th {border-color:#e6e6eb}
+.ac-calendar .fc-axis {font-size:10px;color:#9295a0;width:50px!important;padding:0 5px}
+.ac-calendar .fc-time-grid .fc-slats td {height:var(--ac-slot-height,30px)!important}
+.ac-calendar .fc-time-grid .fc-slats .fc-time {line-height:12px}
+.ac-calendar-tools {min-height:40px;padding:5px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid #ececf0;background:#fafafd}
+.ac-zoom {display:flex;align-items:center;gap:4px;white-space:nowrap}
+.ac-zoom > span {font-size:11px;color:#727582;margin-right:5px}
+.ac-zoom .ac-icon-btn {font-size:18px;line-height:1;padding:0}
+.ac-zoom-value {min-width:52px;font-variant-numeric:tabular-nums;padding:4px 6px}
+.ac-zoom .ac-btn:disabled {cursor:default}
+.ac-zoom-hint {font-size:10px;color:#777b89;text-align:right}
+@media(max-width:1100px){.ac-zoom-hint{display:none}}
+.ac-calendar .fc-time-grid .fc-slats .fc-minor td {border-top-style:solid;border-top-color:#f2f2f5}
+.ac-calendar .fc-today {background:#fafafe!important}
+.ac-calendar .fc-event {border-radius:2px;font-size:10px;border-width:0;padding:2px 3px;cursor:pointer;overflow:hidden}
+.ac-calendar .fc-event .fc-title {font-weight:500;line-height:1.1;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;display:block}
+.ac-calendar .fc-event .fc-time {font-size:9px;line-height:1.1}
+.ac-status-mark {display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex-shrink:0;vertical-align:middle}
+.ac-status-mark svg {display:block;width:14px;height:14px}
+.ac-status-mark.pending {color:#936100}
+.ac-status-mark.approved {color:#375faa}
+.ac-status-mark.checked-in {color:#137552}
+.ac-status-mark.cancelled {color:#a43b48}
+.ac-calendar .fc-event .fc-content {padding-right:23px;min-height:18px}
+.ac-event-status {position:absolute;top:0;right:0;display:inline-flex;align-items:center;justify-content:center;width:21px;height:18px;background:#fff;border-radius:3px;box-shadow:0 0 0 1px #0000000d}
+.ac-badge .ac-status-mark {width:14px;height:12px;margin-right:3px;vertical-align:-2px}
+.ac-badge .ac-status-mark svg {width:12px;height:12px}
+.ac-calendar .fc-event.ac-event-pending {border-left:3px solid #eab24e}
+.ac-calendar .fc-event.ac-event-rejected,.ac-calendar .fc-event.ac-event-cancelled {opacity:.45;text-decoration:line-through}
+.ac-calendar .fc-event.ac-event-completed {opacity:.7}
+.ac-calendar .fc-day-grid-event {padding:4px}
+.ac-calendar .fc-scroller {overflow-y:auto!important;overflow-anchor:none}
+.ac-panel {width:318px;flex-shrink:0;border-left:1px solid #dedee5;background:#fff;position:relative;display:flex;flex-direction:column;max-height:calc(100vh - 196px);min-height:440px}
+.ac-queue-view,.ac-detail-view {display:flex;flex-direction:column;height:100%;overflow:hidden}
+.ac-panel-heading {padding:15px 14px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ac-panel-heading h2 {font-size:13px;font-weight:500;margin:0}
+.ac-queue-date {border:1px solid #dedee5;border-radius:3px;font-size:11px;padding:4px;width:122px;color:#666}
+.ac-channel-tabs {display:flex;border-bottom:1px solid #e5e5ec;background:#f5f5f8}
+.ac-channel-tabs button {flex:1;border:0;border-bottom:3px solid transparent;background:transparent;padding:10px 6px;color:#747582;cursor:pointer}
+.ac-channel-tabs .selected {border-bottom-color:#e5a132;color:#383948}
+.ac-counts {display:flex;padding:12px 7px;border-bottom:1px solid #e5e5ec;gap:4px}
+.ac-counts button {flex:1;min-width:0;background:transparent;border:1px solid transparent;border-radius:3px;padding:3px;cursor:pointer}
+.ac-counts button.selected {border-color:#c6c7d5;background:#f8f8fc}
+.ac-counts span {display:block;text-transform:uppercase;font-size:8px;color:#757786;margin-bottom:6px}
+.ac-counts b {display:block;color:#fff;font-weight:500;border-radius:3px;min-width:29px;padding:2px 5px;font-size:11px;background:#858591}
+.ac-counts .ac-count-pending {background:#c89939}.ac-counts .ac-count-waiting {background:#e57745}.ac-counts .ac-count-engaged {background:#2e9a69}.ac-counts .ac-count-done {background:#37aec2}
+.ac-queue-list {overflow-y:auto;flex:1}
+.ac-booking {width:100%;display:flex;gap:9px;padding:14px 11px;border:0;border-left:4px solid;border-bottom:1px solid #ececf0;background:#fff;cursor:pointer;text-align:left;color:#454652;align-items:flex-start}
+.ac-booking:hover {background:#f6f6fc}
+.ac-booking time {font-size:10px;white-space:nowrap;min-width:50px;color:#898b98;padding-top:2px}
+.ac-booking > div {flex:1;min-width:0}
+.ac-booking strong {font-weight:500;font-size:12px;display:block;margin-bottom:4px;overflow-wrap:anywhere}
+.ac-booking > div > span:not(.ac-badge) {display:block;color:#8b8c98;font-size:10px;margin-bottom:6px}
+.ac-booking small {font-size:9px;color:#9597a2;margin-left:5px}
+.ac-booking > .icon {margin-top:3px;--icon-stroke:#aaa}
+.ac-badge {display:inline-block;font-size:9px;border-radius:3px;padding:3px 6px;background:#f2f2f6;color:#626473;line-height:1.4;white-space:nowrap}
+.ac-badge.pending {background:#fff4d9;color:#896111}.ac-badge.approved {background:#eaf0fc;color:#43639b}.ac-badge.checked-in {background:#fff0e8;color:#a3572b}.ac-badge.in-consultation {background:#e4f5ed;color:#20764f}.ac-badge.completed {background:#e7f5f7;color:#277c8a}.ac-badge.rejected,.ac-badge.cancelled {background:#faeaea;color:#a44848}
+.ac-empty {padding:40px 22px;text-align:center;color:#9294a1;line-height:1.7}
+.ac-empty > div {margin-bottom:14px}
+.ac-empty .icon {width:26px;height:26px;--icon-stroke:#a7a9b8}
+.ac-empty strong {font-weight:500;display:block;color:#777988;font-size:13px}
+.ac-empty p {font-size:11px;margin-top:8px}
+.ac-detail-top {display:flex;align-items:center;justify-content:space-between;padding:12px 10px;border-bottom:1px solid #ececf1;gap:5px}
+.ac-detail-top .ac-btn {border:0;padding:4px;font-size:11px}
+.ac-patient-heading {padding:18px 17px 14px;border-bottom:1px solid #ededf2}
+.ac-eyebrow {font-size:9px;letter-spacing:1px;color:#9294a2}
+.ac-patient-heading h2 {font-size:19px;line-height:1.4;margin:6px 0;color:#3b3c4b;font-weight:500;overflow-wrap:anywhere}
+.ac-patient-heading p {font-size:11px;color:#898b98;margin:0}
+.ac-detail-scroll {flex:1;overflow-y:auto;padding:8px 17px}
+.ac-detail-scroll dl {margin:0}
+.ac-detail-field {padding:9px 0;border-bottom:1px solid #f0f0f4}
+.ac-detail-field dt {font-size:10px;font-weight:400;color:#9294a2;margin-bottom:3px}
+.ac-detail-field dd {font-size:12px;margin:0;color:#515361;overflow-wrap:anywhere;white-space:pre-wrap}
+.ac-detail-actions {display:flex;flex-wrap:wrap;gap:7px;padding:14px;border-top:1px solid #e8e8ef;background:#fafafd}
+.ac-detail-actions .ac-btn {flex:1 1 40%;font-size:11px;min-height:34px}
+.ac-detail-actions .ac-muted {line-height:1.6;margin:0}
+.ac-history {padding:14px 0;font-size:11px}.ac-history summary {cursor:pointer;color:#5a5d78}.ac-history div {border-bottom:1px solid #eee;padding:10px 0}.ac-history small {color:#9698a3;font-size:9px}.ac-history p {margin:5px 0}
+.ac-footer {min-height:30px;border-top:1px solid #e3e3ea;display:flex;justify-content:space-between;gap:8px;padding:8px 14px;font-size:9px;color:#9799a5;background:#fafafd}
+.ac-notice {padding:10px 16px;background:#fff3df;color:#8b6429}
+@media(min-width:1600px){.ac-doctors{width:230px}.ac-panel{width:360px}}
+@media(max-width:1100px){.ac-doctors{width:150px}.ac-panel{width:280px}.ac-timezone{display:none}.ac-topbar{padding:10px 12px}.ac-search{width:180px}.ac-rail{width:42px}.ac-rail-link,.ac-brand{width:42px}.ac-toolbar{gap:8px}.ac-period{min-width:100px}.ac-date-controls{gap:4px}.ac-toolbar-title{font-size:14px}}
+@media(max-width:800px){.ac-body{flex-wrap:wrap}.ac-doctors{width:100%;padding:8px 0;border-bottom:1px solid #ddd}.ac-doctors h2,.ac-legend,.ac-sidebar-note{display:none}.ac-doctor-list{display:flex;overflow:auto;max-height:none}.ac-doctor{min-width:140px;width:auto;gap:10px}.ac-calendar-area{width:100%;flex:auto}.ac-panel{width:100%;max-height:650px;min-height:350px;border-top:1px solid #ddd}.ac-topbar{flex-wrap:wrap}.ac-toolbar{flex-wrap:wrap}.ac-toolbar-title{display:none}.ac-top-actions{flex:1}.ac-search{flex:1;min-width:120px;width:auto}.ac-footer{flex-wrap:wrap}.ac-rail{width:36px}.ac-rail-link,.ac-brand{width:36px}.ac-subtitle{display:none}.ac-topbar h1{font-size:17px}.ac-detail-scroll{max-height:300px}}
+
+.ac-rail .icon {stroke:#fff;fill:none}.ac-rail .icon use {stroke:#fff}
+
+@media(max-width:800px){
+ .ma-calendar-page{padding-top:18px}
+ .ac-top-actions{flex-wrap:wrap;width:100%;min-width:0}
+ .ac-search{flex:1 1 100%;width:100%;min-width:0}
+ .ac-topbar{align-items:stretch}
+ .ac-date-controls{flex-wrap:wrap;max-width:100%}
+ .ac-period{min-width:0}
+ .ac-toolbar{padding:10px 8px}
+}
+
+@media(max-width:800px){.ac-topbar > div:first-child,.ac-top-actions{flex:0 0 100%}.ac-topbar{gap:8px}}
+
+.ac-doctor-counts {display:flex;flex-direction:column;align-items:flex-end;flex-shrink:0;line-height:1.4;min-width:48px}
+.ac-doctor-counts .ac-doctor-total {font-size:12px;font-weight:600}
+.ac-doctor-counts small {font-size:9px;white-space:nowrap;opacity:.85}
+
+.ac-counts .ac-count-approved {background:#6681c4}
+.ac-counts .ac-count-checked-in {background:#219f91}
+.ac-counts .ac-count-cancelled {background:#ba6570}
+.ac-status-dot.cancelled {background:#ba6570}
+.ac-badge.cancelled {color:#a04b57;background:#fbecef}
+
+.ac-toolbar {flex-wrap:wrap}
+.ac-range-controls {display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:9px 16px;background:#fafafd;border-bottom:1px solid #dedee5}
+.ac-range-controls label {display:flex;align-items:center;gap:6px;margin:0;font-size:12px}
+.ac-range-help {font-size:11px;color:#777b89}
+.ac-range-error {font-size:12px;color:#b13d45}
+.ac-calendar .ac-outside-range {background:#f1f1f5;color:#aaa}
+.ac-calendar .ac-outside-range .fc-day-number {opacity:.4}
+.ac-booking-date {display:block;font-size:10px;margin-bottom:3px;color:#636b80}
+
+@media(max-width:800px){.ac-range-active .ac-calendar-area{overflow-x:auto}.ac-range-active .ac-calendar{min-width:560px}}

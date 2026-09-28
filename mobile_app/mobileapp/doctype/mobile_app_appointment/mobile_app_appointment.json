@@ -11,6 +11,7 @@
         "booking_id",
         "links_section",
         "mobile_app_user",
+        "patient_encounter",
         "assigned_agent",
         "doctor_user",
         "column_links_right",
@@ -209,11 +210,18 @@
             "fieldname": "payload_json",
             "fieldtype": "JSON",
             "label": "Payload JSON"
+        },
+        {
+            "fieldname": "patient_encounter",
+            "fieldtype": "Link",
+            "options": "Patient Encounter",
+            "label": "Patient Encounter",
+            "description": "Link the encounter created by the mobile booking. The calendar then uses that encounter as the primary record."
         }
     ],
     "index_web_pages_for_search": 1,
     "links": [],
-    "modified": "2026-05-15 10:00:00.000000",
+    "modified": "2026-09-25 18:19:01.452264",
     "modified_by": "Administrator",
     "module": "MobileApp",
     "name": "Mobile App Appointment",
