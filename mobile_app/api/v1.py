@@ -88,7 +88,7 @@ def _mobile_app_user_api_payload(doc) -> dict[str, Any]:
 
 _INVALID_NAME_CHARS = re.compile(r"[<>]")
 
-# Frappe meta keys echoed by clients; child row `name` must not be reused on sync.
+# Frappe metadata is stripped; existing profile names are separately checked against their owner.
 _CHILD_ROW_META_KEYS = frozenset(
 	{
 		"name",
@@ -157,10 +157,25 @@ def _replace_child_table(doc, fieldname: str, rows: list[dict[str, Any]] | None)
 		return
 	if not isinstance(rows, list):
 		_err(_("{0} must be an array").format(fieldname))
-	doc.set(fieldname, [])
+	# A profile row is also a chat identity. Preserve echoed IDs only when
+	# they belong to this user; never attach another user's child row.
+	existing_profiles = {row.name for row in doc.get("profiles") or []} if fieldname == "profiles" else set()
+	seen = set()
+	cleaned_rows = []
 	for row in rows:
-		if isinstance(row, dict):
-			doc.append(fieldname, _clean_child_row(row))
+		if not isinstance(row, dict):
+			continue
+		cleaned = _clean_child_row(row)
+		if fieldname == "profiles" and row.get("name"):
+			profile_id = str(row["name"])
+			if profile_id not in existing_profiles or profile_id in seen:
+				frappe.throw(_("The selected profile does not belong to this user or is repeated."), frappe.PermissionError)
+			seen.add(profile_id)
+			cleaned["name"] = profile_id
+		cleaned_rows.append(cleaned)
+	doc.set(fieldname, [])
+	for row in cleaned_rows:
+		doc.append(fieldname, row)
 
 
 def _find_user_name(p: dict[str, Any]) -> str | None:
