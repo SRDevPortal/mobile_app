@@ -244,14 +244,39 @@
                 },
             });
         }
-        async fetch() {
+        async loadCalendarRange(start, end) {
+            // Limit a stalled read without changing Frappe's global AJAX settings.
+            this.calendarXHR = $.ajax({
+                url: `/api/method/${API}.get_calendar`, type: "POST", dataType: "json",
+                headers: {"X-Frappe-CSRF-Token": frappe.csrf_token}, timeout: 45000,
+                data: {start: start.format("YYYY-MM-DD"), end: end.format("YYYY-MM-DD")},
+            });
+            const response = await this.calendarXHR;
+            const data = response?.message;
+            if (!Array.isArray(data?.appointments) || !Array.isArray(data?.doctors)) {
+                throw new Error("The calendar server returned an invalid response.");
+            }
+            return data;
+        }
+        async fetch(force = false) {
             if (!this.range || !activeRoute() || !$(this.wrapper).is(":visible")) return;
             const {start, end} = this.range;
+            const rangeKey = `${start.format("YYYY-MM-DD")}:${end.format("YYYY-MM-DD")}`;
+            // A 30-second poll must not invalidate a slower request for the same dates.
+            if (!force && this.loadingRange === rangeKey) return;
             const serial = ++this.request;
+            this.calendarXHR?.abort();
+            clearTimeout(this.slowLoadTimer);
+            this.loadingRange = rangeKey; this.loading = true; this.loadError = false;
+            this.renderQueue();
             this.$root.find('[data-action="refresh"]').prop("disabled", true).attr("aria-busy", "true");
             this.$root.find(".ac-update").text("Refreshing appointments...");
+            this.$root.find(".ac-notice").prop("hidden", true);
+            this.slowLoadTimer = setTimeout(() => {
+                if (serial === this.request) this.$root.find(".ac-notice").text("The server is taking longer than usual to load appointments. Please wait.").prop("hidden", false);
+            }, 8000);
             try {
-                const data = await frappe.xcall(`${API}.get_calendar`, {start: start.format("YYYY-MM-DD"), end: end.format("YYYY-MM-DD")});
+                const data = await this.loadCalendarRange(start, end);
                 if (serial !== this.request || !activeRoute() || !$(this.wrapper).is(":visible")) return;
                 if (this.initialLookup && !(data.appointments || []).length) {
                     // A first visit should not look empty when nearby permitted bookings exist.
@@ -259,10 +284,7 @@
                     const today = moment(frappe.datetime.get_today());
                     let nearby;
                     try {
-                        nearby = await frappe.xcall(`${API}.get_calendar`, {
-                            start: today.clone().subtract(31, "days").format("YYYY-MM-DD"),
-                            end: today.clone().add(31, "days").format("YYYY-MM-DD")
-                        });
+                        nearby = await this.loadCalendarRange(today.clone().subtract(31, "days"), today.clone().add(31, "days"));
                     } catch (e) { /* Keep the successful current-period result if the optional lookup fails. */ }
                     if (serial !== this.request || !activeRoute()) return;
                     if (this.initialLookup) {
@@ -270,6 +292,7 @@
                         dates.sort((a, b) => Math.abs(moment(a).diff(today, "days")) - Math.abs(moment(b).diff(today, "days")) || b.localeCompare(a));
                         this.initialLookup = false;
                         if (dates.length) {
+                            this.loadingRange = null;
                             this.date = moment(dates[0]);
                             this.rememberView();
                             const samePeriod = !this.date.isBefore(start) && this.date.isBefore(end);
@@ -280,6 +303,7 @@
                     }
                 }
                 this.initialLookup = false;
+                this.loading = false; this.hasLoadedData = true;
                 this.rows = data.appointments || []; this.doctors = data.doctors || []; this.canAssign = data.can_assign;
                 this.receptionOnly = Boolean(data.reception_only);
                 this.$root.find('[data-action="new"], [data-action="encounters"]').prop("hidden", this.receptionOnly);
@@ -315,11 +339,21 @@
             } catch (e) {
                 if (serial !== this.request) return;
                 this.drawing = false;
+                this.loading = false; this.loadError = true;
                 // Keep the last successful data visible while a failed refresh can be retried.
-                this.$root.find(".ac-notice").text("Unable to load appointments. Check your access and use Refresh to retry.").prop("hidden", false);
-                this.$root.find(".ac-update").text("Refresh failed ? showing last loaded appointments");
+                const failure = e?.statusText === "timeout" ? "The calendar server did not respond within 45 seconds." :
+                    [401, 403].includes(e?.status) ? "Your session or appointment permissions do not allow this request." :
+                    e?.status >= 500 ? `The calendar server returned an error (HTTP ${e.status}).` :
+                    "The calendar request failed. Check the connection or server logs.";
+                this.$root.find(".ac-notice").text(`${failure} Use Refresh to retry.`).prop("hidden", false);
+                this.$root.find(".ac-update").text(this.hasLoadedData ? "Refresh failed - showing last loaded appointments" : "Appointments could not be loaded");
+                this.renderQueue();
             } finally {
-                if (serial === this.request) this.$root.find('[data-action="refresh"]').prop("disabled", false).attr("aria-busy", "false");
+                if (serial === this.request) {
+                    clearTimeout(this.slowLoadTimer);
+                    this.loadingRange = null; this.calendarXHR = null;
+                    this.$root.find('[data-action="refresh"]').prop("disabled", false).attr("aria-busy", "false");
+                }
             }
         }
         color(id) {
@@ -392,7 +426,7 @@
             const map = {Pending:"Pending", Approved:"Approved", "Checked In":"Checked In", Cancelled:"Cancelled"};
             const visible = rows.filter(r => this.queue === "All" || r.status === map[this.queue]);
             this.$root.find(".ac-queue-view").html(`<div class="ac-counts">${Object.entries(statuses).map(([s,n]) => `<button data-queue="${s}" class="${this.queue === s ? "selected" : ""}"><span>${s}</span><b class="ac-count-${statusClass(s)}">${n}</b></button>`).join("")}</div>
-                <div class="ac-queue-list">${visible.length ? visible.map(r => `<button class="ac-booking" data-booking="${esc(r.id)}" style="border-left-color:${this.color(r.doctor_id)}"><time><span class="ac-booking-date">${moment(r.date).format("D MMM")}</span>${moment(r.time,"HH:mm:ss").format("h:mm A")}</time><div><strong>${esc(r.patient_name)}</strong><span>${esc(r.doctor_name)}</span><span class="ac-badge ${statusClass(r.status)}">${statusMark(r.status)}${esc(r.status)}</span><small>${r.online ? "Online" : "In clinic"}</small></div>${icon("es-line-right-chevron")}</button>`).join("") : `<div class="ac-empty"><div>${icon("calendar")}</div><strong>No appointments here</strong><p>Choose another date or clear your filters. New bookings appear automatically.</p></div>`}</div>`);
+                <div class="ac-queue-list">${visible.length ? visible.map(r => `<button class="ac-booking" data-booking="${esc(r.id)}" style="border-left-color:${this.color(r.doctor_id)}"><time><span class="ac-booking-date">${moment(r.date).format("D MMM")}</span>${moment(r.time,"HH:mm:ss").format("h:mm A")}</time><div><strong>${esc(r.patient_name)}</strong><span>${esc(r.doctor_name)}</span><span class="ac-badge ${statusClass(r.status)}">${statusMark(r.status)}${esc(r.status)}</span><small>${r.online ? "Online" : "In clinic"}</small></div>${icon("es-line-right-chevron")}</button>`).join("") : `<div class="ac-empty"><div>${icon("calendar")}</div><strong>${this.loading ? "Loading appointments..." : this.loadError ? "Appointments unavailable" : "No appointments here"}</strong><p>${this.loading ? "Waiting for the calendar server." : this.loadError ? "Use Refresh to retry. Your appointments have not been removed." : "Choose another date or clear your filters. New bookings appear automatically."}</p></div>`}</div>`);
         }
         async open(record, quiet = false) {
             if (!record) return;
@@ -472,7 +506,7 @@
                 ++this.detailRequest;
                 this.rows = this.rows.map(row => row.id === result.id ? result : row);
                 this.selected = result;this.renderDetail(result);this.renderDoctors();this.renderQueue();frappe.show_alert({message:"Appointment updated",indicator:"green"});
-            } catch (error) { /* Frappe presents the server validation message. */ } finally {this.mutating = false;this.$root.find(".ac-detail-actions button").prop("disabled",false);this.fetch();}
+            } catch (error) { /* Frappe presents the server validation message. */ } finally {this.mutating = false;this.$root.find(".ac-detail-actions button").prop("disabled",false);this.fetch(true);}
         }
         show() {
             document.body.classList.add("ma-calendar-active");
@@ -490,6 +524,8 @@
         hide() {
             clearInterval(this.timer); clearTimeout(this.showTimer);
             ++this.request; ++this.detailRequest;
+            clearTimeout(this.slowLoadTimer); this.calendarXHR?.abort();
+            this.calendarXHR = null; this.loadingRange = null; this.loading = false;
             this.drawing = false;
             document.body.classList.remove("ma-calendar-active");
         }

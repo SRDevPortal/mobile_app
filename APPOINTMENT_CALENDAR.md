@@ -33,7 +33,7 @@ The main doctor count matches the appointments displayed after date, search, doc
 
 Day/Week/Month keep the selected date as their anchor. The toolbar date picker and previous/next controls allow past/future navigation. The browser remembers date/view, custom range and time-scale zoom per user across hard refreshes, without caching appointment data. On a first visit with no saved selection and no bookings in the current period, a permission-scoped lookup within 31 days either side of today selects the nearest appointment. Explicit Today/date choices are respected even when empty.
 
-Refresh runs every 30 seconds while visible, retaining filters and scroll position. Stale responses are ignored; failures retain existing records with a retry notice. Opening an encounter and returning preserves the calendar selection and scroll. Calendar blocks have a default 30-minute display duration; booking dates/times are not rescheduled. Narrow screens use Day view.
+Refresh runs every 30 seconds while visible, retaining filters and scroll position. Same-range polls wait for an existing read; reads time out after 45 seconds with a visible retry message. Navigation cancels obsolete reads. Stale responses are ignored; failures retain existing records with a retry notice. Opening an encounter and returning preserves the calendar selection and scroll. Calendar blocks have a default 30-minute display duration; booking dates/times are not rescheduled. Narrow screens use Day view.
 
 ## Installation and verification
 

@@ -95,3 +95,7 @@ Chromium verified one-day, cross-month and maximum 62-day ranges, invalid/revers
 ## Compatible mobileintl develop update (2026-09-28)
 
 Imported the support-ticket inbox into the existing mobile_app namespace while preserving the appointment calendar implementation. Browser smoke checks verified calendar status marks, Range/zoom controls, Mobile App User Support Ticket tab/API, and App Support Ticket list without page errors. Source hashes and appointment-data snapshots confirm no calendar/clinic workflow or booking changes. 29 backend tests passed. Integration details and dependency exclusions are documented in MOBILEINTL_INTEGRATION.md; browser screenshots are in the recorded integration backup directory.
+
+## Slow calendar reads (2026-09-28)
+
+A pending read now survives the 30-second polling interval; subsequent same-range polls are skipped. Navigation aborts obsolete requests and reads have a 45-second deadline. Initial failures show Appointments unavailable, refresh failures retain previous records, and malformed responses cannot silently empty the calendar. Post-mutation reloads force a fresh read. Chromium verified delayed/held responses using controlled network responses and virtual time, timeout/retry, HTTP 500, malformed payloads and initial-load failures. Range/search/count/reload/Back/mobile regression checks also passed. No appointment changes. Dev's authenticated API timeout remains a separate server-side investigation, documented in DEV_CALENDAR_DEPLOYMENT.md.
