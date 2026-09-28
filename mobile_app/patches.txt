@@ -14,4 +14,3 @@ mobile_app.patches.v1_0.setup_mobile_app_user_doctor_permissions
 mobile_app.patches.v1_0.setup_support_ticket_api_permissions
 mobile_app.patches.v1_0.migrate_engagement_support_tickets_to_doctype
 mobile_app.patches.v1_0.retire_support_ticket_feature
-mobile_app.patches.v1_0.configure_ai_chat_phone_region
