@@ -152,13 +152,72 @@ def _serialize(doc, workflow, context, details=False):
     return out
 
 
+def _calendar_dates(start, end):
+    start, end = getdate(start), getdate(end)
+    if not 0 < (end - start).days <= 62:
+        frappe.throw(_("Choose a date range between 1 and 62 days."))
+    return start, end
+
+
+def _calendar_revisions(start, end, context):
+    """Small change tokens, no patient payload or per-appointment document loading.
+
+    Include linked records so edits, moved/deleted bookings, workflow decisions and
+    doctor/patient changes invalidate the affected date section. Read before the
+    corresponding payload so a concurrent write is seen on the next check.
+    """
+    stamps = []
+    if frappe.db.exists("DocType", "Patient Encounter") and frappe.get_meta("Patient Encounter").has_field("sr_encounter_type"):
+        stamps.extend(frappe.db.sql("""SELECT 'Patient Encounter' AS source, e.name,
+            COALESCE(e.pe_appointment_date, e.encounter_date) AS date,
+            e.modified, e.docstatus, e.status, e.sr_encounter_status,
+            w.modified AS workflow_modified, w.workflow_status, w.assigned_agent,
+            p.modified AS patient_modified, h.modified AS doctor_modified
+            FROM `tabPatient Encounter` e
+            LEFT JOIN `tabMobile Appointment Workflow` w
+                ON w.name=LEFT(SHA2(CONCAT('Patient Encounter:', e.name), 256), 32)
+            LEFT JOIN `tabPatient` p ON p.name=e.patient
+            LEFT JOIN `tabHealthcare Practitioner` h ON h.name=COALESCE(NULLIF(e.pe_practitioner, ''), e.practitioner)
+            WHERE e.sr_encounter_type='Appointment'
+                AND ((e.pe_appointment_date >= %s AND e.pe_appointment_date < %s)
+                    OR (e.pe_appointment_date IS NULL AND e.encounter_date >= %s AND e.encounter_date < %s))
+            """, (start, end, start, end), as_dict=True))
+    stamps.extend(frappe.db.sql("""SELECT 'Mobile App Appointment' AS source, a.name,
+        a.appointment_date AS date, a.modified, a.docstatus, a.status,
+        w.modified AS workflow_modified, w.workflow_status, w.assigned_agent
+        FROM `tabMobile App Appointment` a
+        LEFT JOIN `tabMobile Appointment Workflow` w
+            ON w.name=LEFT(SHA2(CONCAT('Mobile App Appointment:', a.name), 256), 32)
+        WHERE a.appointment_date >= %s AND a.appointment_date < %s
+            AND COALESCE(a.patient_encounter, '')=''""", (start, end), as_dict=True))
+    roster = frappe.get_all("Healthcare Practitioner", fields=["name", "modified", "status", "user_id"],
+                            order_by="name", limit_page_length=0)
+    scope = (context[0], sorted(context[1]), context[2], roster, frappe.utils.get_system_timezone())
+    chunks = []
+    while start < end:
+        stop = min(start + timedelta(days=7), end)
+        values = sorted((row for row in stamps if start <= getdate(row.date) < stop),
+                        key=lambda row: (row.source, row.name))
+        revision = hashlib.sha256(repr((scope, values)).encode()).hexdigest()
+        chunks.append({"start": str(start), "end": str(stop), "revision": revision})
+        start = stop
+    return chunks
+
+
+@frappe.whitelist()
+def get_calendar_changes(start, end):
+    """Permission-gated change manifest; clients fetch only changed date sections."""
+    context = _context()
+    start, end = _calendar_dates(start, end)
+    return {"chunks": _calendar_revisions(start, end, context)}
+
+
 @frappe.whitelist()
 def get_calendar(start, end):
     """End-exclusive date range. Never return patient data outside the caller's scope."""
     context = _context()
-    start, end = getdate(start), getdate(end)
-    if not 0 < (end - start).days <= 62:
-        frappe.throw(_("Choose a date range between 1 and 62 days."))
+    start, end = _calendar_dates(start, end)
+    revisions = _calendar_revisions(start, end, context)
     rows = []
     if frappe.db.exists("DocType", "Patient Encounter") and frappe.get_meta("Patient Encounter").has_field("sr_encounter_type"):
         encounters = frappe.db.sql("""SELECT name, patient_name, patient, sr_pe_mobile, sr_encounter_type,
@@ -166,9 +225,9 @@ def get_calendar(start, end):
             encounter_time, pe_practitioner, practitioner, status, sr_encounter_status, docstatus, created_by_agent
             FROM `tabPatient Encounter`
             WHERE sr_encounter_type='Appointment'
-            AND COALESCE(pe_appointment_date, encounter_date) >= %s
-            AND COALESCE(pe_appointment_date, encounter_date) < %s
-            ORDER BY COALESCE(pe_appointment_date, encounter_date) LIMIT 2001""", (start, end), as_dict=True)
+            AND ((pe_appointment_date >= %s AND pe_appointment_date < %s)
+                OR (pe_appointment_date IS NULL AND encounter_date >= %s AND encounter_date < %s))
+            ORDER BY COALESCE(pe_appointment_date, encounter_date) LIMIT 2001""", (start, end, start, end), as_dict=True)
         missing_patients = {row.patient for row in encounters if row.patient and (not row.patient_name or not row.sr_pe_mobile)}
         patients = {p.name: p for p in frappe.get_all("Patient", filters={"name": ["in", list(missing_patients)]},
             fields=["name", "patient_name", "mobile"], limit_page_length=0)} if missing_patients else {}
@@ -194,6 +253,16 @@ def get_calendar(start, end):
     keys = [_key(row.doctype, row.name) for row in rows]
     workflows = {row.name: row for row in frappe.get_all(WORKFLOW,
         filters={"name": ["in", keys]}, fields=["*"], limit_page_length=0)} if keys else {}
+    # Resolve practitioners in one query, including inactive doctors on older bookings.
+    practitioner_ids = {row.get("pe_practitioner") or row.get("practitioner")
+                        for row in rows if row.doctype == "Patient Encounter"}
+    practitioner_ids.discard(None)
+    practitioner_ids.discard("")
+    frappe.local.appointment_calendar_doctors = {name: {} for name in practitioner_ids}
+    if practitioner_ids:
+        frappe.local.appointment_calendar_doctors.update({p.name: p for p in frappe.get_all(
+            "Healthcare Practitioner", filters={"name": ["in", list(practitioner_ids)]},
+            fields=["name", "practitioner_name", "user_id"], limit_page_length=0)})
     for doc in rows:
         workflow = workflows.get(_key(doc.doctype, doc.name), frappe._dict())
         if _can_read(doc, workflow, context):
@@ -203,7 +272,8 @@ def get_calendar(start, end):
         doctor_filters["user_id"] = context[0]
     doctors = frappe.get_all("Healthcare Practitioner", filters=doctor_filters,
         fields=["name as id", "practitioner_name as name"], order_by="practitioner_name", limit_page_length=0)
-    return {"appointments": result, "doctors": doctors, "can_assign": context[2], "user": context[0],
+    return {"appointments": result, "doctors": doctors, "revisions": revisions,
+            "can_assign": context[2], "user": context[0],
             "reception_only": RECEPTION_ROLE in context[1] and not context[2],
             "timezone": frappe.utils.get_system_timezone()}
 

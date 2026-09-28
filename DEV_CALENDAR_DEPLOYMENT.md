@@ -1,5 +1,7 @@
 # Dev calendar request failure: deployment and diagnostics
 
+Latest follow-up: see [CALENDAR_LAZY_LOADING.md](CALENDAR_LAZY_LOADING.md) for progressive loading, change checks and the required date-index deployment step. The earlier investigation below remains historical evidence, not confirmation that dev is healthy.
+
 ## Confirmed findings
 
 The dev page renders the new calendar but does not load its roster/appointments. Authenticated calendar reads timed out from both WSL/Python and Windows/Node, including a future date with no appointments. An unauthenticated `/api/method/ping` returned HTTP 200 in 0.27 seconds, while authenticated ping reads timed out. Earlier authenticated resource reads confirmed nine active practitioners, Mobile Appointment Workflow, and Patient Encounter-custom_appointment_status. These checks do not establish the exact server-side cause; error-log reads also timed out.

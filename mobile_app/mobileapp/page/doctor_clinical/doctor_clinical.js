@@ -94,7 +94,7 @@
                         </div><span class="ac-zoom-hint">Ctrl + scroll to zoom</span></div>
                         <div class="ac-calendar"></div></section>
                     <aside class="ac-panel" aria-label="Appointment details and patient queue"><div class="ac-queue-view"></div><div class="ac-detail-view" hidden></div></aside></div>
-                    <footer class="ac-footer"><span class="ac-update">Loading appointments?</span><span>Calendar times follow the clinic timezone &middot; Auto-refresh every 30 seconds</span></footer>
+                    <footer class="ac-footer"><span class="ac-update">Loading appointments...</span><span>Calendar times follow the clinic timezone &middot; Checks for new appointments every 15 seconds</span></footer>
                 </main></div>`).appendTo(this.page.main.empty());
             this.$cal = this.$root.find(".ac-calendar");
             this.$cal[0].style.setProperty("--ac-slot-height", `${30 * this.zoom / 100}px`);
@@ -244,113 +244,149 @@
                 },
             });
         }
-        async loadCalendarRange(start, end) {
-            // Limit a stalled read without changing Frappe's global AJAX settings.
+        dateSections(start, end) {
+            const sections = [];
+            for (let date = start.clone(); date.isBefore(end); date.add(7, "days")) {
+                const stop = moment.min(date.clone().add(7, "days"), end);
+                sections.push({start: date.format("YYYY-MM-DD"), end: stop.format("YYYY-MM-DD")});
+            }
+            return sections;
+        }
+        sectionKey(section) { return `${section.start}:${section.end}`; }
+        async calendarRead(method, data) {
             this.calendarXHR = $.ajax({
-                url: `/api/method/${API}.get_calendar`, type: "POST", dataType: "json",
-                headers: {"X-Frappe-CSRF-Token": frappe.csrf_token}, timeout: 45000,
-                data: {start: start.format("YYYY-MM-DD"), end: end.format("YYYY-MM-DD")},
+                url: `/api/method/${API}.${method}`, type: "POST", dataType: "json",
+                headers: {"X-Frappe-CSRF-Token": frappe.csrf_token}, timeout: 45000, data,
             });
-            const response = await this.calendarXHR;
-            const data = response?.message;
-            if (!Array.isArray(data?.appointments) || !Array.isArray(data?.doctors)) {
+            return (await this.calendarXHR)?.message;
+        }
+        async loadCalendarRange(start, end) {
+            const data = await this.calendarRead("get_calendar", {start, end});
+            if (!Array.isArray(data?.appointments) || !Array.isArray(data?.doctors) ||
+                !Array.isArray(data?.revisions) || !data.revisions[0]?.revision) {
                 throw new Error("The calendar server returned an invalid response.");
             }
             return data;
         }
-        async fetch(force = false) {
+        syncEvents() {
+            // Reconcile events in place: a background check must not blank the calendar.
+            const desired = new Map(this.events().map(event => [event.id, event]));
+            for (const existing of this.$cal.fullCalendar("clientEvents")) {
+                const next = desired.get(existing.id);
+                if (!next) this.$cal.fullCalendar("removeEvents", existing.id);
+                else {
+                    if (JSON.stringify(existing.record) !== JSON.stringify(next.record)) {
+                        Object.assign(existing, next);
+                        this.$cal.fullCalendar("updateEvent", existing);
+                    }
+                    desired.delete(existing.id);
+                }
+            }
+            if (desired.size) this.$cal.fullCalendar("renderEvents", [...desired.values()], true);
+        }
+        applySection(section, data, serial) {
+            const incoming = new Set(data.appointments.map(row => row.id));
+            this.rows = this.rows.filter(row => !incoming.has(row.id) && (row.date < section.start || row.date >= section.end))
+                .concat(data.appointments);
+            this.doctors = data.doctors; this.canAssign = data.can_assign;
+            this.hasLoadedData = true;
+            if (this.selected && this.selected.date >= section.start && this.selected.date < section.end &&
+                !data.appointments.some(row => row.id === this.selected.id)) this.close();
+            this.receptionOnly = Boolean(data.reception_only);
+            this.$root.find('[data-action="new"], [data-action="encounters"]').prop("hidden", this.receptionOnly);
+            this.$root.find(".ac-subtitle").text(this.receptionOnly ? "Approved appointments and completed check-ins" : "Bookings, approvals and patient queue");
+            if (this.receptionOnly && !["All", "Approved", "Checked In"].includes(this.queue)) this.queue = "All";
+            this.$root.find(".ac-timezone").text(data.timezone);
+            this.$root.find(".ac-notice").prop("hidden", true);
+            this.renderDoctors(); this.renderQueue();
+            const previousScroll = this.calendarScroll ?? this.$cal.find(".fc-time-grid-container").scrollTop();
+            this.drawing = true;
+            this.syncEvents();
+            const initialScroll = !this.scrolled;
+            this.scrolled = true;
+            setTimeout(() => {
+                if (serial !== this.request || !activeRoute()) return;
+                const rowHeight = this.$cal.find(".fc-slats tr")[0]?.getBoundingClientRect().height || 30;
+                let scrollTop = previousScroll || 0;
+                if (initialScroll) {
+                    const visible = this.filtered();
+                    const day = visible.filter(r => r.date === this.date.format("YYYY-MM-DD"));
+                    const times = (day.length ? day : visible).map(r => r.time).sort();
+                    const first = times.length ? moment(times[0], "HH:mm:ss") : null;
+                    const minutes = first ? Math.max(0, first.hours() * 60 + first.minutes() - 30) : 480;
+                    scrollTop = rowHeight * Math.floor(minutes / 15);
+                }
+                this.$cal.find(".fc-time-grid-container").scrollTop(scrollTop);
+                this.calendarScroll = this.$cal.find(".fc-time-grid-container").scrollTop() ?? this.calendarScroll;
+                this.drawing = false;
+            }, 50);
+
+        }
+        async fetch(force = false, background = false) {
             if (!this.range || !activeRoute() || !$(this.wrapper).is(":visible")) return;
             const {start, end} = this.range;
             const rangeKey = `${start.format("YYYY-MM-DD")}:${end.format("YYYY-MM-DD")}`;
-            // A 30-second poll must not invalidate a slower request for the same dates.
             if (!force && this.loadingRange === rangeKey) return;
             const serial = ++this.request;
             this.calendarXHR?.abort();
-            clearTimeout(this.slowLoadTimer);
             this.loadingRange = rangeKey; this.loading = true; this.loadError = false;
+            this.revisions ||= new Map();
+            const sameRange = this.loadedRange === rangeKey;
+            if (!sameRange) {
+                this.revisions.clear();
+                this.rows = this.rows.filter(row => row.date >= start.format("YYYY-MM-DD") && row.date < end.format("YYYY-MM-DD"));
+                this.loadedRange = rangeKey;
+                this.hasLoadedData = false;
+                this.syncEvents(); this.renderDoctors();
+            }
+            // Keep the chosen period. Do not issue a hidden 62-day nearest-booking scan.
+            this.initialLookup = false; this.rememberView();
             this.renderQueue();
             this.$root.find('[data-action="refresh"]').prop("disabled", true).attr("aria-busy", "true");
-            this.$root.find(".ac-update").text("Refreshing appointments...");
+            this.$root.find(".ac-update").text(background && sameRange ? "Checking for new appointments..." : "Loading appointments...");
             this.$root.find(".ac-notice").prop("hidden", true);
-            this.slowLoadTimer = setTimeout(() => {
-                if (serial === this.request) this.$root.find(".ac-notice").text("The server is taking longer than usual to load appointments. Please wait.").prop("hidden", false);
-            }, 8000);
+            let completed = 0;
             try {
-                const data = await this.loadCalendarRange(start, end);
-                if (serial !== this.request || !activeRoute() || !$(this.wrapper).is(":visible")) return;
-                if (this.initialLookup && !(data.appointments || []).length) {
-                    // A first visit should not look empty when nearby permitted bookings exist.
-                    // Reuse the permission-scoped API; reception never sees pending bookings.
-                    const today = moment(frappe.datetime.get_today());
-                    let nearby;
-                    try {
-                        nearby = await this.loadCalendarRange(today.clone().subtract(31, "days"), today.clone().add(31, "days"));
-                    } catch (e) { /* Keep the successful current-period result if the optional lookup fails. */ }
+                let sections = this.dateSections(start, end);
+                if (background && sameRange && this.revisions.size) {
+                    const changes = await this.calendarRead("get_calendar_changes", {
+                        start: start.format("YYYY-MM-DD"), end: end.format("YYYY-MM-DD"),
+                    });
                     if (serial !== this.request || !activeRoute()) return;
-                    if (this.initialLookup) {
-                        const dates = [...new Set((nearby?.appointments || []).map(r => r.date).filter(Boolean))];
-                        dates.sort((a, b) => Math.abs(moment(a).diff(today, "days")) - Math.abs(moment(b).diff(today, "days")) || b.localeCompare(a));
-                        this.initialLookup = false;
-                        if (dates.length) {
-                            this.loadingRange = null;
-                            this.date = moment(dates[0]);
-                            this.rememberView();
-                            const samePeriod = !this.date.isBefore(start) && this.date.isBefore(end);
-                            this.$cal.fullCalendar("gotoDate", this.date);
-                            if (samePeriod) this.fetch();
-                            return;
-                        }
+                    if (!Array.isArray(changes?.chunks) || changes.chunks.length !== sections.length ||
+                        changes.chunks.some((part, i) => this.sectionKey(part) !== this.sectionKey(sections[i]) || !part.revision)) {
+                        throw new Error("Invalid calendar change response.");
                     }
+                    sections = changes.chunks.filter(section => this.revisions.get(this.sectionKey(section)) !== section.revision);
                 }
-                this.initialLookup = false;
+                // Load the selected date first, then progressively fill the remaining dates.
+                const focus = this.date.format("YYYY-MM-DD");
+                sections.sort((a, b) => Number(b.start <= focus && focus < b.end) - Number(a.start <= focus && focus < a.end));
+                for (const section of sections) {
+                    const data = await this.loadCalendarRange(section.start, section.end);
+                    if (serial !== this.request || !activeRoute() || !$(this.wrapper).is(":visible")) return;
+                    this.applySection(section, data, serial);
+                    this.revisions.set(this.sectionKey(section), data.revisions[0].revision);
+                    completed++;
+                    this.$root.find(".ac-update").text(`${this.rows.length} bookings loaded | Loading dates ${completed}/${sections.length}...`);
+                }
                 this.loading = false; this.hasLoadedData = true;
-                this.rows = data.appointments || []; this.doctors = data.doctors || []; this.canAssign = data.can_assign;
-                this.receptionOnly = Boolean(data.reception_only);
-                this.$root.find('[data-action="new"], [data-action="encounters"]').prop("hidden", this.receptionOnly);
-                this.$root.find(".ac-subtitle").text(this.receptionOnly ? "Approved appointments and completed check-ins" : "Bookings, approvals and patient queue");
-                if (this.receptionOnly && !["All", "Approved", "Checked In"].includes(this.queue)) this.queue = "All";
-                this.$root.find(".ac-timezone").text(data.timezone);
-                this.$root.find(".ac-notice").prop("hidden", true);
-                this.renderDoctors(); this.renderQueue();
-                const previousScroll = this.calendarScroll ?? this.$cal.find(".fc-time-grid-container").scrollTop();
-                this.drawing = true;
-                this.$cal.fullCalendar("removeEvents");
-                this.$cal.fullCalendar("renderEvents", this.events(), true);
-                const initialScroll = !this.scrolled;
-                this.scrolled = true;
-                setTimeout(() => {
-                    if (serial !== this.request || !activeRoute()) return;
-                    const rowHeight = this.$cal.find(".fc-slats tr")[0]?.getBoundingClientRect().height || 30;
-                    let scrollTop = previousScroll || 0;
-                    if (initialScroll) {
-                        const visible = this.filtered();
-                        const day = visible.filter(r => r.date === this.date.format("YYYY-MM-DD"));
-                        const times = (day.length ? day : visible).map(r => r.time).sort();
-                        const first = times.length ? moment(times[0], "HH:mm:ss") : null;
-                        const minutes = first ? Math.max(0, first.hours() * 60 + first.minutes() - 30) : 480;
-                        scrollTop = rowHeight * Math.floor(minutes / 15);
-                    }
-                    this.$cal.find(".fc-time-grid-container").scrollTop(scrollTop);
-                    this.calendarScroll = this.$cal.find(".fc-time-grid-container").scrollTop() ?? this.calendarScroll;
-                    this.drawing = false;
-                }, 50);
+                this.renderQueue();
                 this.$root.find(".ac-update").text(`${this.rows.length} bookings in this period | Updated ${moment().format("h:mm A")}`);
-                if (this.selected && !this.mutating) this.open(this.selected, true);
+                if (completed && this.selected && !this.mutating) this.open(this.selected, true);
             } catch (e) {
                 if (serial !== this.request) return;
-                this.drawing = false;
-                this.loading = false; this.loadError = true;
-                // Keep the last successful data visible while a failed refresh can be retried.
+                this.drawing = false; this.loading = false; this.loadError = true;
                 const failure = e?.statusText === "timeout" ? "The calendar server did not respond within 45 seconds." :
                     [401, 403].includes(e?.status) ? "Your session or appointment permissions do not allow this request." :
                     e?.status >= 500 ? `The calendar server returned an error (HTTP ${e.status}).` :
                     "The calendar request failed. Check the connection or server logs.";
-                this.$root.find(".ac-notice").text(`${failure} Use Refresh to retry.`).prop("hidden", false);
-                this.$root.find(".ac-update").text(this.hasLoadedData ? "Refresh failed - showing last loaded appointments" : "Appointments could not be loaded");
+                // Slow background work is quiet; a real failure is still visible and retryable.
+                this.$root.find(".ac-notice").text(`${failure} Loaded appointments remain visible. Use Refresh to retry.`).prop("hidden", false);
+                this.$root.find(".ac-update").text(this.hasLoadedData ? "Refresh incomplete - showing loaded appointments" : "Appointments could not be loaded");
                 this.renderQueue();
             } finally {
                 if (serial === this.request) {
-                    clearTimeout(this.slowLoadTimer);
                     this.loadingRange = null; this.calendarXHR = null;
                     this.$root.find('[data-action="refresh"]').prop("disabled", false).attr("aria-busy", "false");
                 }
@@ -505,12 +541,12 @@
                 const result = await frappe.xcall(`${API}.update_appointment`,{doctype:r.source_doctype,name:r.name,action,expected_status:r.status,...values});
                 ++this.detailRequest;
                 this.rows = this.rows.map(row => row.id === result.id ? result : row);
-                this.selected = result;this.renderDetail(result);this.renderDoctors();this.renderQueue();frappe.show_alert({message:"Appointment updated",indicator:"green"});
+                this.selected = result;this.renderDetail(result);this.renderDoctors();this.renderQueue();this.syncEvents();frappe.show_alert({message:"Appointment updated",indicator:"green"});
             } catch (error) { /* Frappe presents the server validation message. */ } finally {this.mutating = false;this.$root.find(".ac-detail-actions button").prop("disabled",false);this.fetch(true);}
         }
         show() {
             document.body.classList.add("ma-calendar-active");
-            clearInterval(this.timer);this.timer = setInterval(()=>{if(activeRoute() && !document.hidden && !this.mutating) this.fetch();},30000);
+            clearInterval(this.timer);this.timer = setInterval(()=>{if(activeRoute() && !document.hidden && !this.mutating) this.fetch(false, true);},15000);
             clearTimeout(this.showTimer);
             this.showTimer = setTimeout(() => {
                 if (!activeRoute()) return;
@@ -524,7 +560,7 @@
         hide() {
             clearInterval(this.timer); clearTimeout(this.showTimer);
             ++this.request; ++this.detailRequest;
-            clearTimeout(this.slowLoadTimer); this.calendarXHR?.abort();
+            this.calendarXHR?.abort();
             this.calendarXHR = null; this.loadingRange = null; this.loading = false;
             this.drawing = false;
             document.body.classList.remove("ma-calendar-active");

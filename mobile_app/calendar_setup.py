@@ -8,6 +8,7 @@ def after_migrate():
         if not frappe.db.exists("Role", role):
             frappe.get_doc({"doctype": "Role", "role_name": role, "desk_access": 1}).insert(ignore_permissions=True)
     setup_encounter_status()
+    setup_calendar_indexes()
     frappe.clear_cache()
 
 
@@ -38,3 +39,14 @@ def setup_encounter_status():
         status = _status(doc, _workflow(doc.doctype, doc.name))
         _sync_encounter_status(doc, status)
         _sync_clinic_status(doc, status)
+
+
+def setup_calendar_indexes():
+    """Bound date lookups to the visible period instead of scanning encounter history."""
+    if frappe.db.exists("DocType", "Patient Encounter"):
+        meta = frappe.get_meta("Patient Encounter")
+        fields = ["sr_encounter_type", "pe_appointment_date", "encounter_date"]
+        if all(meta.has_field(field) for field in fields):
+            frappe.db.add_index("Patient Encounter", fields, "appointment_calendar_dates")
+    if frappe.db.exists("DocType", "Mobile App Appointment"):
+        frappe.db.add_index("Mobile App Appointment", ["appointment_date"], "appointment_calendar_date")

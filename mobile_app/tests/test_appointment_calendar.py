@@ -277,3 +277,67 @@ class TestAppointmentCalendar(unittest.TestCase):
         self.assertEqual(frappe.db.get_value("Patient Encounter", name, api.APPOINTMENT_STATUS_FIELD), "Cancelled")
         doc.sr_encounter_type = "Followup"; api.sync_encounter_status(doc)
         self.assertEqual(doc.custom_appointment_status, "")
+
+    def test_change_tokens_match_sections_and_track_insert_move_delete(self):
+        def changes():
+            return api.get_calendar_changes("2099-01-01", "2099-01-22")["chunks"]
+        before = changes()
+        self.assertEqual(len(before), 3)
+        for section in before:
+            payload = api.get_calendar(section["start"], section["end"])
+            self.assertEqual(payload["revisions"], [section])
+        self.assertEqual(before, changes())
+        name = "calendar-lazy-" + self.suffix
+        frappe.get_doc({"doctype": "Mobile App Appointment", "name": name,
+            "appointment_date": "2099-01-02", "patient_name": "Lazy load test"}).db_insert()
+        inserted = changes()
+        self.assertNotEqual(before[0], inserted[0])
+        self.assertEqual(before[1:], inserted[1:])
+        frappe.db.set_value("Mobile App Appointment", name, "appointment_date", "2099-01-20")
+        moved = changes()
+        self.assertEqual(before[0], moved[0])
+        self.assertNotEqual(before[2], moved[2])
+        frappe.db.delete("Mobile App Appointment", {"name": name})
+        self.assertEqual(before, changes())
+
+    def test_change_tokens_track_workflow_and_recheck_permissions(self):
+        before = api.get_calendar_changes("2099-01-01", "2099-01-22")["chunks"]
+        self.update("approve", "Pending")
+        after = api.get_calendar_changes("2099-01-01", "2099-01-22")["chunks"]
+        self.assertEqual(before[0], after[0])
+        self.assertNotEqual(before[1], after[1])
+        self.assertEqual(before[2], after[2])
+        self.roles[self.other] = ["Appointment Receptionist"]
+        frappe.set_user(self.other)
+        result = api.get_calendar("2099-01-08", "2099-01-15")
+        self.assertEqual([r["name"] for r in result["appointments"]], [self.name])
+        self.assertNotEqual(after[1]["revision"], result["revisions"][0]["revision"])
+        self.roles[self.other] = []
+        with self.assertRaises(frappe.PermissionError):
+            api.get_calendar_changes("2099-01-01", "2099-01-22")
+        frappe.set_user("Guest")
+        with self.assertRaises(frappe.PermissionError):
+            api.get_calendar_changes("2099-01-01", "2099-01-22")
+        frappe.set_user("Administrator")
+        with self.assertRaises(frappe.ValidationError):
+            api.get_calendar_changes("2099-01-01", "2099-12-31")
+
+    def test_change_tokens_track_encounter_and_patient_edits(self):
+        patient = "calendar-lazy-patient-" + self.suffix
+        encounter = "calendar-lazy-encounter-" + self.suffix
+        frappe.get_doc({"doctype": "Patient", "name": patient,
+            "patient_name": "Lazy patient", "mobile": "7700900123"}).db_insert()
+        frappe.get_doc({"doctype": "Patient Encounter", "name": encounter,
+            "patient": patient, "sr_encounter_type": "Appointment",
+            "encounter_date": "2099-01-10"}).db_insert()
+        def token():
+            return api.get_calendar_changes("2099-01-08", "2099-01-15")["chunks"][0]
+        before = token()
+        frappe.db.set_value("Patient", patient, "mobile", "7700900124")
+        self.assertNotEqual(before, token())
+        before = token()
+        api.update_appointment("Patient Encounter", encounter, "approve", "Pending")
+        self.assertNotEqual(before, token())
+        before = token()
+        frappe.db.set_value("Patient Encounter", encounter, "pe_appointment_date", "2099-01-21")
+        self.assertNotEqual(before, token())
