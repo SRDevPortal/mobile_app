@@ -1,5 +1,7 @@
 # Progressive calendar loading
 
+For the confirmed dev query backlog, database deadlines and recovery commands, see [DEV_CALENDAR_RECOVERY.md](DEV_CALENDAR_RECOVERY.md).
+
 The old eight-second warning could appear during a full-range background reload even when appointments were already visible. This change removes that slow-load banner and reduces repeated work; actual request failures remain visible and retryable.
 
 ## Behavior

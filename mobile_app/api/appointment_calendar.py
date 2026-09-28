@@ -152,6 +152,29 @@ def _serialize(doc, workflow, context, details=False):
     return out
 
 
+CALENDAR_QUERY_TIMEOUT = 8
+
+
+def _calendar_sql(query, values=(), as_dict=True):
+    """Stop expensive MariaDB reads even after the HTTP client has disconnected.
+
+    A browser timeout/abort does not cancel a database query. The statement-local
+    limit deliberately leaves other requests, writes and session settings alone.
+    """
+    if not query.lstrip().upper().startswith("SELECT "):
+        raise ValueError("Only calendar SELECT statements may use this helper")
+    if frappe.db.db_type == "mariadb":
+        query = "SET STATEMENT max_statement_time = %s FOR " + query
+        values = (CALENDAR_QUERY_TIMEOUT, *values)
+    try:
+        return frappe.db.sql(query, values, as_dict=as_dict)
+    except frappe.db.OperationalError as exc:
+        # Some Frappe/PyMySQL combinations do not classify MariaDB error 1969.
+        if exc.args and exc.args[0] == 1969:
+            raise frappe.QueryTimeoutError("Appointment query exceeded the database time limit") from exc
+        raise
+
+
 def _calendar_dates(start, end):
     start, end = getdate(start), getdate(end)
     if not 0 < (end - start).days <= 62:
@@ -168,7 +191,7 @@ def _calendar_revisions(start, end, context):
     """
     stamps = []
     if frappe.db.exists("DocType", "Patient Encounter") and frappe.get_meta("Patient Encounter").has_field("sr_encounter_type"):
-        stamps.extend(frappe.db.sql("""SELECT 'Patient Encounter' AS source, e.name,
+        stamps.extend(_calendar_sql("""SELECT 'Patient Encounter' AS source, e.name,
             COALESCE(e.pe_appointment_date, e.encounter_date) AS date,
             e.modified, e.docstatus, e.status, e.sr_encounter_status,
             w.modified AS workflow_modified, w.workflow_status, w.assigned_agent,
@@ -182,7 +205,7 @@ def _calendar_revisions(start, end, context):
                 AND ((e.pe_appointment_date >= %s AND e.pe_appointment_date < %s)
                     OR (e.pe_appointment_date IS NULL AND e.encounter_date >= %s AND e.encounter_date < %s))
             """, (start, end, start, end), as_dict=True))
-    stamps.extend(frappe.db.sql("""SELECT 'Mobile App Appointment' AS source, a.name,
+    stamps.extend(_calendar_sql("""SELECT 'Mobile App Appointment' AS source, a.name,
         a.appointment_date AS date, a.modified, a.docstatus, a.status,
         w.modified AS workflow_modified, w.workflow_status, w.assigned_agent
         FROM `tabMobile App Appointment` a
@@ -220,7 +243,7 @@ def get_calendar(start, end):
     revisions = _calendar_revisions(start, end, context)
     rows = []
     if frappe.db.exists("DocType", "Patient Encounter") and frappe.get_meta("Patient Encounter").has_field("sr_encounter_type"):
-        encounters = frappe.db.sql("""SELECT name, patient_name, patient, sr_pe_mobile, sr_encounter_type,
+        encounters = _calendar_sql("""SELECT name, patient_name, patient, sr_pe_mobile, sr_encounter_type,
             sr_encounter_place, pe_appointment_date, encounter_date, pe_appointment_time,
             encounter_time, pe_practitioner, practitioner, status, sr_encounter_status, docstatus, created_by_agent
             FROM `tabPatient Encounter`

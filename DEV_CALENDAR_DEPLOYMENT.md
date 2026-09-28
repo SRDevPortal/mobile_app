@@ -1,6 +1,8 @@
 # Dev calendar request failure: deployment and diagnostics
 
-Latest follow-up: see [CALENDAR_LAZY_LOADING.md](CALENDAR_LAZY_LOADING.md) for progressive loading, change checks and the required date-index deployment step. The earlier investigation below remains historical evidence, not confirmation that dev is healthy.
+Current recovery procedure: see [DEV_CALENDAR_RECOVERY.md](DEV_CALENDAR_RECOVERY.md).
+
+Earlier follow-up: see [CALENDAR_LAZY_LOADING.md](CALENDAR_LAZY_LOADING.md) for progressive loading, change checks and the required date-index deployment step. The earlier investigation below remains historical evidence, not confirmation that dev is healthy.
 
 ## Confirmed findings
 

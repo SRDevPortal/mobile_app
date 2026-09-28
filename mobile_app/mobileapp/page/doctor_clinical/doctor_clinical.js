@@ -371,13 +371,17 @@
                     this.$root.find(".ac-update").text(`${this.rows.length} bookings loaded | Loading dates ${completed}/${sections.length}...`);
                 }
                 this.loading = false; this.hasLoadedData = true;
+                this.failedRefreshes = 0; this.nextAutomaticRefresh = 0;
                 this.renderQueue();
                 this.$root.find(".ac-update").text(`${this.rows.length} bookings in this period | Updated ${moment().format("h:mm A")}`);
                 if (completed && this.selected && !this.mutating) this.open(this.selected, true);
             } catch (e) {
                 if (serial !== this.request) return;
                 this.drawing = false; this.loading = false; this.loadError = true;
-                const failure = e?.statusText === "timeout" ? "The calendar server did not respond within 45 seconds." :
+                this.failedRefreshes = (this.failedRefreshes || 0) + 1;
+                this.nextAutomaticRefresh = Date.now() + Math.min(300000, 15000 * 2 ** Math.min(this.failedRefreshes, 5));
+                const failure = e?.responseJSON?.exc_type === "QueryTimeoutError" ? "The database stopped a slow appointment query." :
+                    e?.statusText === "timeout" ? "The calendar server did not respond within 45 seconds." :
                     [401, 403].includes(e?.status) ? "Your session or appointment permissions do not allow this request." :
                     e?.status >= 500 ? `The calendar server returned an error (HTTP ${e.status}).` :
                     "The calendar request failed. Check the connection or server logs.";
@@ -546,7 +550,7 @@
         }
         show() {
             document.body.classList.add("ma-calendar-active");
-            clearInterval(this.timer);this.timer = setInterval(()=>{if(activeRoute() && !document.hidden && !this.mutating) this.fetch(false, true);},15000);
+            clearInterval(this.timer);this.timer = setInterval(()=>{if(activeRoute() && !document.hidden && !this.mutating && Date.now() >= (this.nextAutomaticRefresh || 0)) this.fetch(false, true);},15000);
             clearTimeout(this.showTimer);
             this.showTimer = setTimeout(() => {
                 if (!activeRoute()) return;

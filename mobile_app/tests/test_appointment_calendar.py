@@ -341,3 +341,17 @@ class TestAppointmentCalendar(unittest.TestCase):
         before = token()
         frappe.db.set_value("Patient Encounter", encounter, "pe_appointment_date", "2099-01-21")
         self.assertNotEqual(before, token())
+
+    def test_database_stops_slow_reads_without_leaking_session_timeout(self):
+        import time
+        before = frappe.db.sql("SELECT @@session.max_statement_time")[0][0]
+        started = time.monotonic()
+        with patch.object(api, "CALENDAR_QUERY_TIMEOUT", 0.05):
+            with self.assertRaises(frappe.QueryTimeoutError):
+                api._calendar_sql("SELECT SLEEP(2)")
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(frappe.db.sql("SELECT @@session.max_statement_time")[0][0], before)
+        self.assertEqual(api._calendar_sql("SELECT 1 AS value")[0].value, 1)
+        # No settings or writes can accidentally run through the read helper.
+        with self.assertRaises(ValueError):
+            api._calendar_sql("DELETE FROM `tabPatient Encounter`")

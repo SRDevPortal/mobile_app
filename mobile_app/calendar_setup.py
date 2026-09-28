@@ -7,8 +7,8 @@ def after_migrate():
     for role in ("Appointment Agent", "Appointment Manager", "Appointment Receptionist"):
         if not frappe.db.exists("Role", role):
             frappe.get_doc({"doctype": "Role", "role_name": role, "desk_access": 1}).insert(ignore_permissions=True)
-    setup_encounter_status()
     setup_calendar_indexes()
+    setup_encounter_status()
     frappe.clear_cache()
 
 
