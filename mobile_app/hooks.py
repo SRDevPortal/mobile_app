@@ -5,8 +5,14 @@ app_description = "Mobile app data storage"
 app_email = "admin@example.com"
 app_license = "mit"
 
-after_install = "mobile_app.calendar_setup.after_migrate"
-after_migrate = "mobile_app.calendar_setup.after_migrate"
+after_install = [
+    "mobile_app.calendar_setup.after_migrate",
+    "mobile_app.practitioner_setup.setup_practitioner_diseases",
+]
+after_migrate = [
+    "mobile_app.calendar_setup.after_migrate",
+    "mobile_app.practitioner_setup.setup_practitioner_diseases",
+]
 boot_session = "mobile_app.realtime.boot_session"
 
 # Apps

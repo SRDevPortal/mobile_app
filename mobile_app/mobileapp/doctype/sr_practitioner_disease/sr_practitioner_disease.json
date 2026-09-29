@@ -1,0 +1,27 @@
+{
+ "actions": [],
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "disease"
+ ],
+ "fields": [
+  {
+   "fieldname": "disease",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Disease",
+   "options": "DPT Disease",
+   "reqd": 1
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "module": "MobileApp",
+ "name": "SR Practitioner Disease",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
