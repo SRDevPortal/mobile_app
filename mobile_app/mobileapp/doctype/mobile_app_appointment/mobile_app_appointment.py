@@ -12,6 +12,8 @@ from mobile_app.mobileapp.appointment_utils import (
 
 class MobileAppAppointment(Document):
 	def validate(self):
+		from mobile_app.api.practitioners import validate_appointment
+		validate_appointment(self)
 		if not self.doctor_user and self.doctor_name:
 			self.doctor_user = resolve_doctor_user(self.doctor_name)
 		apply_consultation_rules(self)
@@ -39,6 +41,9 @@ def sync_child_row_from_standalone(doc: Document) -> None:
 		row.consultation_type = doc.consultation_type
 		row.status = doc.status
 		row.doctor_name = doc.doctor_name
+		row.practitioner_id = doc.practitioner_id
+		row.practitioner_schedule = doc.practitioner_schedule
+		row.duration = doc.duration
 		row.appointment_date = doc.appointment_date
 		row.appointment_time = doc.appointment_time
 		row.email_status = doc.email_status

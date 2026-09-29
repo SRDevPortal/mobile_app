@@ -15,6 +15,9 @@
         "assigned_agent",
         "doctor_user",
         "column_links_right",
+        "practitioner_id",
+        "practitioner_schedule",
+        "duration",
         "doctor_name",
         "patient_name",
         "schedule_section",
@@ -217,6 +220,23 @@
             "options": "Patient Encounter",
             "label": "Patient Encounter",
             "description": "Link the encounter created by the mobile booking. The calendar then uses that encounter as the primary record."
+        },
+        {
+            "fieldname": "practitioner_id",
+            "fieldtype": "Link",
+            "label": "Healthcare Practitioner",
+            "options": "Healthcare Practitioner"
+        },
+        {
+            "fieldname": "practitioner_schedule",
+            "fieldtype": "Link",
+            "label": "Practitioner Schedule",
+            "options": "Practitioner Schedule"
+        },
+        {
+            "fieldname": "duration",
+            "fieldtype": "Float",
+            "label": "Duration (minutes)"
         }
     ],
     "index_web_pages_for_search": 1,

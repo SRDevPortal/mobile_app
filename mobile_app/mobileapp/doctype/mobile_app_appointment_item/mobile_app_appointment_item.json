@@ -11,6 +11,9 @@
         "submission_timestamp",
         "appointment_date",
         "appointment_time",
+        "practitioner_id",
+        "practitioner_schedule",
+        "duration",
         "doctor_name",
         "patient_name",
         "mobile_number",
@@ -118,6 +121,23 @@
             "fieldname": "payload_json",
             "fieldtype": "JSON",
             "label": "Payload JSON"
+        },
+        {
+            "fieldname": "practitioner_id",
+            "fieldtype": "Link",
+            "label": "Healthcare Practitioner",
+            "options": "Healthcare Practitioner"
+        },
+        {
+            "fieldname": "practitioner_schedule",
+            "fieldtype": "Link",
+            "label": "Practitioner Schedule",
+            "options": "Practitioner Schedule"
+        },
+        {
+            "fieldname": "duration",
+            "fieldtype": "Float",
+            "label": "Duration (minutes)"
         }
     ],
     "istable": 1,
