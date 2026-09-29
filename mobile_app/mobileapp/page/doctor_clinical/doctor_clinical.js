@@ -42,6 +42,15 @@
             this.render();
             this.bind();
             this.initCalendar();
+            mobile_app.realtime.watch("calendar", ["Mobile App Appointment", "Patient Encounter",
+                "Mobile Appointment Workflow", "Healthcare Practitioner", "Patient", "Clinic Appointment"],
+                () => activeRoute() && $(this.wrapper).is(":visible"),
+                () => {
+                    if (this.loading || this.mutating) return false;
+                    // Names and doctor availability can change without a booking revision.
+                    this.revisions?.clear();
+                    return this.fetch(false, true);
+                });
         }
         rememberView() {
             if (this.initialLookup) return;
@@ -371,15 +380,12 @@
                     this.$root.find(".ac-update").text(`${this.rows.length} bookings loaded | Loading dates ${completed}/${sections.length}...`);
                 }
                 this.loading = false; this.hasLoadedData = true;
-                this.failedRefreshes = 0; this.nextAutomaticRefresh = 0;
                 this.renderQueue();
                 this.$root.find(".ac-update").text(`${this.rows.length} bookings in this period | Updated ${moment().format("h:mm A")}`);
                 if (completed && this.selected && !this.mutating) this.open(this.selected, true);
             } catch (e) {
                 if (serial !== this.request) return;
                 this.drawing = false; this.loading = false; this.loadError = true;
-                this.failedRefreshes = (this.failedRefreshes || 0) + 1;
-                this.nextAutomaticRefresh = Date.now() + Math.min(300000, 15000 * 2 ** Math.min(this.failedRefreshes, 5));
                 const failure = e?.responseJSON?.exc_type === "QueryTimeoutError" ? "The database stopped a slow appointment query." :
                     e?.statusText === "timeout" ? "The calendar server did not respond within 45 seconds." :
                     [401, 403].includes(e?.status) ? "Your session or appointment permissions do not allow this request." :
@@ -393,6 +399,7 @@
                 if (serial === this.request) {
                     this.loadingRange = null; this.calendarXHR = null;
                     this.$root.find('[data-action="refresh"]').prop("disabled", false).attr("aria-busy", "false");
+                    mobile_app.realtime.flush();
                 }
             }
         }
@@ -550,7 +557,6 @@
         }
         show() {
             document.body.classList.add("ma-calendar-active");
-            clearInterval(this.timer);this.timer = setInterval(()=>{if(activeRoute() && !document.hidden && !this.mutating && Date.now() >= (this.nextAutomaticRefresh || 0)) this.fetch(false, true);},15000);
             clearTimeout(this.showTimer);
             this.showTimer = setTimeout(() => {
                 if (!activeRoute()) return;
@@ -562,7 +568,7 @@
             }, 50);
         }
         hide() {
-            clearInterval(this.timer); clearTimeout(this.showTimer);
+            clearTimeout(this.showTimer);
             ++this.request; ++this.detailRequest;
             this.calendarXHR?.abort();
             this.calendarXHR = null; this.loadingRange = null; this.loading = false;

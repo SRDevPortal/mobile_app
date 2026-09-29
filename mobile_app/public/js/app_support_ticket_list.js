@@ -1,4 +1,5 @@
 /* App Support Ticket list - patient identity first column */
+mobile_app.realtime.configure_lists();
 
 function ast_escape(value) {
 	return frappe.utils.escape_html(value == null || value === "" ? "" : String(value));

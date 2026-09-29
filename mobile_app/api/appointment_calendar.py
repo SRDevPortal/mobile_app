@@ -360,7 +360,8 @@ def update_appointment(doctype, name, action, expected_status, reason=None, agen
     if reason:
         message += f". Reason: {reason.strip()}"
     state.add_comment("Comment", text=frappe.utils.escape_html(message))
-    # Publish only to this user's session; other users poll within their own permission scope.
+    # The workflow's on_change hook invalidates other sessions after commit.
+    # This legacy event remains available for existing clients.
     frappe.publish_realtime("appointment_calendar_updated", user=context[0], after_commit=True)
     return _serialize(doc, state, context, details=True)
 

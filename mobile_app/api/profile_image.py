@@ -23,6 +23,8 @@ def _sync_mobile_app_user_image_field(doc_name: str, file_doc) -> str | None:
 		return None
 	frappe.db.set_value("File", file_doc.name, "is_private", 0)
 	frappe.db.set_value("Mobile App User", doc_name, "image", url)
+	from mobile_app.realtime import notify_change
+	notify_change(frappe._dict(doctype="Mobile App User"))
 	return url
 
 

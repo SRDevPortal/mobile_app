@@ -7,6 +7,7 @@ app_license = "mit"
 
 after_install = "mobile_app.calendar_setup.after_migrate"
 after_migrate = "mobile_app.calendar_setup.after_migrate"
+boot_session = "mobile_app.realtime.boot_session"
 
 # Apps
 # ------------------
@@ -35,7 +36,8 @@ app_include_css = [
 app_include_js = [
 	"/assets/mobile_app/js/doctor_clinical_guard.js",
 	"/assets/mobile_app/js/mobile_app_desk_utils.js",
-	"/assets/mobile_app/js/mobile_app_workspace.js?v=20260901_ai_chat_transition",
+	"/assets/mobile_app/js/mobile_app_realtime.js?v=20260929_events",
+	"/assets/mobile_app/js/mobile_app_workspace.js?v=20260929_events",
 ]
 # app_include_js = "/assets/mobile_app/js/mobile_app.js"
 
@@ -285,3 +287,13 @@ doc_events = {
         "on_cancel": "mobile_app.api.appointment_calendar.sync_encounter_status",
     }
 }
+
+for _doctype in (
+    "Mobile App User", "Mobile App Appointment", "App Support Ticket",
+    "Patient Encounter", "Healthcare Practitioner", "Patient",
+    "Mobile Appointment Workflow", "Clinic Appointment",
+):
+    doc_events.setdefault(_doctype, {}).update({
+        "on_change": "mobile_app.realtime.notify_change",
+        "after_delete": "mobile_app.realtime.notify_change",
+    })

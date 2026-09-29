@@ -8,6 +8,7 @@
 	const STYLE_ID = "ma-mobile-dashboard-runtime-style";
 	let render_timer = null;
 	let is_rendering = false;
+	let metrics_request = null;
 
 	const CARDS = [
 		{
@@ -91,7 +92,7 @@
 				.length > 0;
 
 		const workspace_visible =
-			frappe.workspace?.body?.length ||
+			frappe.workspace?.body?.is(":visible") ||
 			$('[data-page-route="Workspaces"]:visible').length ||
 			$(".editor-js-container:visible").length;
 
@@ -273,34 +274,38 @@
 	}
 
 	function update_metrics() {
-		CARDS.forEach((card) => {
-			if (!card.doctype) return;
-
-			frappe.db
+		if (metrics_request) return false;
+		const requests = CARDS.filter(card => card.doctype).map((card) => {
+			return frappe.db
 				.count(card.doctype)
 				.then((count) => $(`[data-card-metric="${card.key}"]`).text(count))
 				.catch(() => $(`[data-card-metric="${card.key}"]`).text("--"));
 		});
 
 		const [this_month_start, next_month_start] = current_month_range();
-		get_count("Mobile App User", [
+		requests.push(get_count("Mobile App User", [
 			["Mobile App User", "creation", ">=", this_month_start],
 			["Mobile App User", "creation", "<", next_month_start],
 		])
 			.then((count) => set_footer("users", count))
-			.catch(() => set_footer("users", "--"));
+			.catch(() => set_footer("users", "--")));
 
 		const [today_start, tomorrow_start] = date_range(0, 1);
-		get_count("Mobile App Appointment", [
+		requests.push(get_count("Mobile App Appointment", [
 			["Mobile App Appointment", "creation", ">=", today_start],
 			["Mobile App Appointment", "creation", "<", tomorrow_start],
 		])
 			.then((count) => set_footer("appointments", count))
-			.catch(() => set_footer("appointments", "--"));
+			.catch(() => set_footer("appointments", "--")));
 
-		get_count("App Support Ticket", [["App Support Ticket", "status", "not in", ["Closed", "Resolved"]]])
+		requests.push(get_count("App Support Ticket", [["App Support Ticket", "status", "not in", ["Closed", "Resolved"]]])
 			.then((count) => set_footer("tickets", count))
-			.catch(() => set_footer("tickets", "--"));
+			.catch(() => set_footer("tickets", "--")));
+		metrics_request = Promise.all(requests).finally(() => {
+			metrics_request = null;
+			mobile_app.realtime.flush();
+		});
+		return metrics_request;
 	}
 
 	function render_dashboard() {
@@ -319,6 +324,10 @@
 			inject_runtime_style();
 			const $root = workspace_root();
 			if (!$root.length) return;
+			if ($root.find(`.${DASHBOARD_SHELL_CLASS}`).length) {
+				hide_raw_workspace_blocks($root);
+				return;
+			}
 
 			const $dashboard = $(`
 				<div class="${DASHBOARD_SHELL_CLASS}">
@@ -339,34 +348,23 @@
 		render_timer = window.setTimeout(render_dashboard, 80);
 	}
 
-	function schedule_render_burst() {
-		schedule_render();
-		[250, 600, 1200, 2200, 4000].forEach((delay) => {
-			window.setTimeout(schedule_render, delay);
-		});
-	}
-
 	$(document).on("page-change", () => {
-		schedule_render_burst();
+		schedule_render();
 	});
 
 	frappe.router?.on?.("change", () => {
-		schedule_render_burst();
+		schedule_render();
 	});
 
 	$(document).ready(() => {
-		schedule_render_burst();
-		frappe.after_ajax?.(schedule_render_burst);
+		schedule_render();
+		frappe.after_ajax?.(schedule_render);
+		mobile_app.realtime.watch("workspace", CARDS.filter(card => card.doctype).map(card => card.doctype),
+			() => is_mobile_workspace() && Boolean($(`.${DASHBOARD_SHELL_CLASS}`).length), update_metrics);
 	});
 
 	new MutationObserver(() => {
 		if (!is_mobile_workspace()) return;
 		if (!$(`.${DASHBOARD_SHELL_CLASS}`).length) schedule_render();
 	}).observe(document.body, { childList: true, subtree: true });
-
-	window.setInterval(() => {
-		if (is_mobile_workspace() && !$(`.${DASHBOARD_SHELL_CLASS}`).length) {
-			schedule_render();
-		}
-	}, 1500);
 })();
