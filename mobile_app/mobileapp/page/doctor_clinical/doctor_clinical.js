@@ -3,7 +3,8 @@
     const API = "mobile_app.api.appointment_calendar";
     const esc = value => frappe.utils.escape_html(String(value == null ? "" : value));
     const icon = name => frappe.utils.icon(name, "sm");
-    const colors = ["#ac579f", "#719925", "#4c89b3", "#df754b", "#7964bd", "#219f91"];
+    // Dark doctor colours keep white appointment labels legible in every view.
+    const colors = ["#176b63", "#456579", "#316596", "#667333", "#885367", "#366b4b"];
     const labels = {approve: "Approve appointment", cancel: "Cancel appointment", check_in: "Check in", claim: "Take responsibility"};
     const statusClass = value => String(value).toLowerCase().replaceAll(" ", "-");
     const statusMark = status => {
