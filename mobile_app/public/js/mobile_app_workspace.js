@@ -9,6 +9,7 @@
 	let render_timer = null;
 	let is_rendering = false;
 	let metrics_request = null;
+	let $dashboard = null;
 
 	const CARDS = [
 		{
@@ -81,22 +82,7 @@
 			route_is_mobile_workspace ||
 			(route_is_workspace && route.some((part) => part === WORKSPACE_LABEL.toLowerCase()));
 
-		const selected_workspace =
-			frappe.workspace?.current_page?.name === WORKSPACE_LABEL ||
-			frappe.workspace?._page?.title === WORKSPACE_LABEL ||
-			frappe.workspace?._page?.name === WORKSPACE_LABEL ||
-			$(".layout-side-section .selected .sidebar-item-label")
-				.filter(function () {
-					return $(this).text().trim() === WORKSPACE_LABEL;
-				})
-				.length > 0;
-
-		const workspace_visible =
-			frappe.workspace?.body?.is(":visible") ||
-			$('[data-page-route="Workspaces"]:visible').length ||
-			$(".editor-js-container:visible").length;
-
-		return Boolean(route_match || (workspace_visible && selected_workspace));
+		return route_match;
 	}
 
 	function inject_runtime_style() {
@@ -124,6 +110,9 @@
 			.ma-mobile-dashboard-card__footer strong { color: #fff; font-weight: 850; white-space: nowrap; }
 			body.${ACTIVE_BODY_CLASS} .ma-mobile-dashboard-raw-hidden { display: none !important; }
 			body.${ACTIVE_BODY_CLASS} .ma-workspace-title { display: none !important; }
+			/* The custom cards have their own loading values; the native skeleton shifts them. */
+			body.${ACTIVE_BODY_CLASS} .workspace-skeleton { display: none !important; }
+			body.${ACTIVE_BODY_CLASS} .ce-block:has(.ma-workspace-title) { display: none !important; }
 			@media (max-width: 1199px) { .${DASHBOARD_CLASS} { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 			@media (max-width: 767px) { .${DASHBOARD_CLASS} { grid-template-columns: 1fr; gap: 16px; } .ma-mobile-dashboard-card { min-height: 176px; } }
 		`;
@@ -169,56 +158,7 @@
 	function workspace_root() {
 		const $workspace_body = frappe.workspace?.body?.find(".editor-js-container").first();
 		if ($workspace_body?.length) return $workspace_body;
-
-		const $page = $('[data-page-route="Workspaces"]').last();
-		const $page_body = $page.find(".editor-js-container, .workspace-body").first();
-		if ($page_body.length) return $page_body;
-
-		const $raw_main = $(".layout-main-section, .workspace-body")
-			.filter(function () {
-				const text = compact_text($(this).text());
-				return (
-					text.includes("MobileAppMobileAppUser") &&
-					text.includes("DoctorClinicalPortal")
-				);
-			})
-			.first();
-		if ($raw_main.length) return $raw_main;
-
-		const $main = $(".layout-main-section")
-			.filter(function () {
-				return (
-					$(this).find(".shortcut-widget-box").length ||
-					$(this).find(".workspace-title, h3, h4").filter(function () {
-						return $(this).text().trim() === WORKSPACE_LABEL;
-					}).length
-				);
-			})
-			.first();
-
-		return $main.length ? $main : $(".layout-main-section").first();
-	}
-
-	function place_dashboard($root, $dashboard) {
-		const $existing = $root.find(`.${DASHBOARD_SHELL_CLASS}`).first();
-		if ($existing.length) {
-			$existing.replaceWith($dashboard);
-			return;
-		}
-
-		const $title = $root
-			.find(".ce-header, .workspace-title, h3, h4")
-			.filter(function () {
-				return $(this).text().trim() === WORKSPACE_LABEL;
-			})
-			.first();
-
-		const $title_block = $title.closest(".ce-block, .widget, .workspace-title, .row, .flex");
-		if ($title_block.length && $title_block.closest($root).length) {
-			$title_block.after($dashboard);
-		} else {
-			$root.prepend($dashboard);
-		}
+		return $('[data-page-route="Workspaces"] .editor-js-container').first();
 	}
 
 	function hide_raw_workspace_blocks($root) {
@@ -262,8 +202,15 @@
 		return [frappe.datetime.obj_to_str(start), frappe.datetime.obj_to_str(end)];
 	}
 
+	function set_value(attribute, key, value) {
+		// Keep updates made while another page is open on the retained cards, too.
+		const $value = $dashboard.find(`[data-card-${attribute}="${key}"]`);
+		const text = String(value ?? "--");
+		if ($value.text() !== text) $value.text(text);
+	}
+
 	function set_footer(key, value) {
-		$(`[data-card-footer="${key}"]`).text(value ?? "--");
+		set_value("footer", key, value);
 	}
 
 	function get_count(doctype, filters) {
@@ -278,8 +225,8 @@
 		const requests = CARDS.filter(card => card.doctype).map((card) => {
 			return frappe.db
 				.count(card.doctype)
-				.then((count) => $(`[data-card-metric="${card.key}"]`).text(count))
-				.catch(() => $(`[data-card-metric="${card.key}"]`).text("--"));
+				.then((count) => set_value("metric", card.key, count))
+				.catch(() => set_value("metric", card.key, "--"));
 		});
 
 		const [this_month_start, next_month_start] = current_month_range();
@@ -316,7 +263,7 @@
 			const active = is_mobile_workspace();
 			document.body.classList.toggle(ACTIVE_BODY_CLASS, active);
 			if (!active) {
-				$(`.${DASHBOARD_SHELL_CLASS}`).remove();
+				$dashboard?.detach();
 				$(".ma-mobile-dashboard-raw-hidden").removeClass("ma-mobile-dashboard-raw-hidden");
 				return;
 			}
@@ -324,37 +271,39 @@
 			inject_runtime_style();
 			const $root = workspace_root();
 			if (!$root.length) return;
-			if ($root.find(`.${DASHBOARD_SHELL_CLASS}`).length) {
-				hide_raw_workspace_blocks($root);
-				return;
+			const first_render = !$dashboard;
+			if (first_render) {
+				$dashboard = $(`
+					<div class="${DASHBOARD_SHELL_CLASS}">
+						<div class="${DASHBOARD_CLASS}">${CARDS.map(card_html).join("")}</div>
+					</div>
+				`);
+				bind_cards($dashboard);
 			}
-
-			const $dashboard = $(`
-				<div class="${DASHBOARD_SHELL_CLASS}">
-					<div class="${DASHBOARD_CLASS}">${CARDS.map(card_html).join("")}</div>
-				</div>
-			`);
-			place_dashboard($root, $dashboard);
+			// Stay outside #editorjs: its asynchronous render replaces its contents.
+			// Reuse these nodes and counts when returning from a list or workspace.
+			if ($dashboard.parent()[0] !== $root[0]) {
+				$root.prepend($dashboard);
+				mobile_app.realtime.flush();
+			}
 			hide_raw_workspace_blocks($root);
-			bind_cards($dashboard);
-			update_metrics();
+			if (first_render) update_metrics();
 		} finally {
 			is_rendering = false;
 		}
 	}
 
 	function schedule_render() {
-		window.clearTimeout(render_timer);
-		render_timer = window.setTimeout(render_dashboard, 80);
+		if (render_timer !== null) return;
+		render_timer = window.requestAnimationFrame(() => {
+			render_timer = null;
+			render_dashboard();
+		});
 	}
 
-	$(document).on("page-change", () => {
-		schedule_render();
-	});
-
-	frappe.router?.on?.("change", () => {
-		schedule_render();
-	});
+	// Apply the route's visibility before the next paint, including while Frappe loads.
+	$(document).on("page-change", render_dashboard);
+	frappe.router?.on?.("change", render_dashboard);
 
 	$(document).ready(() => {
 		schedule_render();
@@ -365,6 +314,6 @@
 
 	new MutationObserver(() => {
 		if (!is_mobile_workspace()) return;
-		if (!$(`.${DASHBOARD_SHELL_CLASS}`).length) schedule_render();
+		schedule_render();
 	}).observe(document.body, { childList: true, subtree: true });
 })();

@@ -1,9 +1,14 @@
 # Mobile App updates
 
-The workspace renders its cards once. The appointment calendar and the Mobile App
-User, Mobile App Appointment and App Support Ticket lists have no periodic data
-refresh. Opening a view, changing its filters/date range and manual Refresh still
-load data.
+The workspace creates its cards once per browser session and keeps the same nodes
+and counts when navigating away and back. Its first opening loads the counts;
+returning only fetches them if a data-change notification is pending. Cards live
+outside the native workspace editor, and the native loading skeleton is hidden
+only on this workspace so asynchronous loading cannot shift or replace the cards.
+
+The appointment calendar and the Mobile App User, Mobile App Appointment and App
+Support Ticket lists have no periodic data refresh. Opening these views, changing
+filters/date ranges and manual Refresh still load data.
 
 Committed inserts, edits, cancellations and deletions publish
 `mobile_app_data_changed`. The message contains only a DocType name; each view
@@ -45,3 +50,10 @@ tunnel must target that port, rather than the web-only port 8000. The local
 coalescing, hidden views, in-flight changes, failure behavior, reconnects and the
 list compatibility adapter. The site-backed `mobile_app.tests.test_realtime`
 suite checks transaction commit/rollback and actual insert/update/delete hooks.
+
+For workspace layout regressions, check from the first visible frame with a slow
+`frappe.desk.desktop.get_desktop_page` response: card positions should stay fixed
+and the native workspace skeleton should not appear above them. Navigate to a
+list and another workspace and back; the same cards and counts should return
+without another metrics request. A change received while away should trigger one
+metrics update on return, without replacing the cards.
