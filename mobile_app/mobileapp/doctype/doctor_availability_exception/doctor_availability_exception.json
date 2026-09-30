@@ -1,0 +1,22 @@
+{
+ "doctype": "DocType",
+ "name": "Doctor Availability Exception",
+ "module": "MobileApp",
+ "engine": "InnoDB",
+ "autoname": "hash",
+ "field_order": ["exception_key", "practitioner", "date", "unavailable", "time_slots"],
+ "fields": [
+  {"fieldname": "exception_key", "fieldtype": "Data", "label": "Exception Key", "hidden": 1, "read_only": 1, "unique": 1},
+  {"fieldname": "practitioner", "fieldtype": "Link", "options": "Healthcare Practitioner", "label": "Doctor", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "date", "fieldtype": "Date", "label": "Date", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "unavailable", "fieldtype": "Check", "label": "Unavailable all day", "default": "0", "in_list_view": 1},
+  {"fieldname": "time_slots", "fieldtype": "Table", "options": "Healthcare Schedule Time Slot", "label": "Replacement time slots", "depends_on": "eval: !doc.unavailable"}
+ ],
+ "permissions": [
+  {"role": "Healthcare Administrator", "read": 1, "write": 1, "create": 1, "delete": 1},
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1}
+ ],
+ "sort_field": "date",
+ "sort_order": "desc",
+ "track_changes": 1
+}

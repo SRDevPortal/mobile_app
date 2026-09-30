@@ -31,6 +31,81 @@ body.ma-calendar-active .container.page-body {max-width:none;padding:0}
 .ac-rail .es-icon {--icon-stroke:#fff;--icon-fill:transparent}
 .ac-rail-link {height:48px;width:54px;border:0;background:transparent;color:#fff;cursor:pointer}
 .ac-rail-link:hover,.ac-rail-link.active {background:#205e57}
+.ac-clinic-icon {width:24px;height:24px;vertical-align:middle}
+.dd-hidden {display:none!important}
+.dd-view {flex:1;min-width:0}
+.dd-body {display:flex;min-height:calc(100vh - 170px)}
+.ac-btn.dd-setting {display:flex;flex-direction:column;align-items:flex-start;flex:1;text-align:left;white-space:normal;padding:14px!important}
+.dd-setting strong,.dd-setting span {display:block}
+.dd-setting span {font-size:11px;margin-top:5px;font-weight:400}
+.dd-hours-builder {padding:16px;margin:14px 0;background:#fff;border:1px solid var(--ac-border);border-radius:6px}
+.dd-hours-builder h4 {font-size:14px;margin:0 0 8px}
+.dd-working-days,.dd-hours-fields {display:flex;flex-wrap:wrap;gap:12px;margin:12px 0}
+.dd-working-days label {display:flex;align-items:center;gap:6px;margin:0;padding:7px 10px;border:1px solid var(--ac-border);border-radius:4px}
+.dd-hours-fields {align-items:flex-end}
+.dd-hours-fields label {display:flex;flex-direction:column;gap:5px;margin:0}
+.dd-hours-fields input,.dd-hours-fields select {padding:6px;border:1px solid var(--ac-border);border-radius:4px;background:#fff}
+.dd-editor .dd-table-scroll {max-height:290px;overflow:auto}
+.dd-sidebar {width:255px;flex-shrink:0;background:var(--ac-surface);border-right:1px solid var(--ac-border);padding:18px 12px}
+.dd-sidebar > label {display:block;font-size:11px;color:var(--ac-muted);margin-bottom:8px}
+.dd-sidebar .ac-search {width:100%;background:#fff}
+.dd-list {margin:16px -12px 0;max-height:75vh;overflow:auto}
+.dd-person {display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;padding:13px 12px;text-align:left;color:var(--ac-ink);cursor:pointer}
+.dd-person:hover {background:var(--ac-tint)}
+.dd-person.selected {background:var(--ac-brand);color:#fff}
+.dd-person strong,.dd-person small {display:block}
+.dd-person strong {font-size:12px;margin-bottom:4px}
+.dd-person small {font-size:10px;opacity:.85;line-height:1.6}
+.dd-avatar {width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#dceee8;color:var(--ac-brand);font-weight:600;flex-shrink:0}
+.dd-content {flex:1;min-width:0;padding:22px 26px}
+.dd-profile {display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.dd-profile > div {margin-right:auto}
+.dd-content h2 {font-size:18px;margin:0 0 6px;color:var(--ac-ink)}
+.dd-content h3 {font-size:15px;margin:0 0 10px;color:var(--ac-ink)}
+.dd-profile p {color:var(--ac-muted);margin:0}
+.dd-status {background:var(--ac-tint);color:var(--ac-brand);padding:5px 10px;border-radius:14px;font-size:11px}
+.dd-contact {display:flex;gap:24px;flex-wrap:wrap;color:var(--ac-muted);margin:16px 0 22px;padding-bottom:18px;border-bottom:1px solid var(--ac-border)}
+.dd-toolbar {display:flex;align-items:center;justify-content:space-between;gap:16px;margin:24px 0 14px;flex-wrap:wrap}
+.dd-editor summary {cursor:pointer;padding:8px 0;color:var(--ac-brand)}
+.dd-calendar .fc-month-view .fc-event {white-space:normal;font-size:11px}
+.dd-toolbar h2 {font-size:15px}
+.dd-toolbar small {color:var(--ac-muted)}
+.dd-date-actions {display:flex;align-items:center;gap:6px}
+.dd-calendar .fc-toolbar {display:none}
+.dd-calendar td,.dd-calendar th {border-color:var(--ac-border)}
+.dd-calendar th {font-weight:500;font-size:11px;padding:8px 2px}
+.dd-calendar .fc-event {cursor:pointer;border:0;padding:2px;border-radius:3px;color:#fff}
+.dd-calendar .fc-axis {font-size:10px;color:var(--ac-muted)}
+.dd-calendar .fc-bg td {position:relative}
+.dd-calendar .fc-bg td.dd-status-working {background:#e5f4ee;color:#11665e}
+.dd-calendar .fc-bg td.dd-status-leave,.dd-calendar .fc-bg td.dd-status-off {background:#a33d50;color:#fff}
+.dd-calendar .fc-day-top.dd-status-leave .fc-day-number,.dd-calendar .fc-day-top.dd-status-off .fc-day-number {color:#fff;opacity:1}
+.dd-calendar .fc-bg td.dd-status-inactive {background:#f1f4f5;color:#52666c}
+.dd-calendar .dd-date-status {position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:6px;font-size:12px;font-weight:600;line-height:1.4;pointer-events:none;overflow-wrap:anywhere}
+.dd-calendar .fc-bg td.dd-selected-day {box-shadow:inset 0 0 0 2px var(--ac-brand)}
+.dd-calendar .fc-bg td:focus-visible {outline:2px solid var(--ac-brand);outline-offset:-3px}
+@media(max-width:650px){.dd-calendar .dd-date-status{font-size:9px;padding:2px}}
+.dd-calendar .fc-time-grid-container {overflow-y:auto!important}
+.dd-key {display:flex;gap:18px;font-size:10px;margin-top:8px;flex-wrap:wrap}
+.dd-key span:nth-child(1) {color:#176b63}.dd-key span:nth-child(2) {color:#316596}.dd-key span:nth-child(3) {color:#a33d50}
+.dd-key span.dd-leave-key,.dd-key span.dd-off-key {color:#a33d50}
+.dd-mode {display:flex;gap:6px;margin:24px 0 16px}
+.dd-editor {padding:18px;background:var(--ac-surface);border:1px solid var(--ac-border);border-radius:6px}
+.dd-note {font-size:11px;color:var(--ac-muted);line-height:1.7;margin:8px 0 14px}
+.dd-editor fieldset {padding:0;border:0;margin:12px 0;min-width:0}
+.dd-check {display:flex;align-items:center;gap:8px}
+.dd-editor select,.dd-editor input:not([type=checkbox]) {border:1px solid #c9dad6;background:#fff;color:var(--ac-ink);border-radius:3px;padding:6px;max-width:100%;font-size:12px}
+.dd-schedule-select {margin-left:8px;max-width:90%}
+.dd-table-scroll {overflow-x:auto;margin:12px 0}
+.dd-slots {width:100%;border-collapse:collapse}
+.dd-slots th {text-align:left;font-weight:500;color:var(--ac-muted);font-size:11px}
+.dd-slots td,.dd-slots th {padding:5px 8px 5px 0}
+.dd-slots input {width:110px}.dd-slots .dd-capacity {width:75px}
+.dd-save-actions {display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.dd-error {color:var(--ac-cancelled);font-size:12px}
+.dd-empty,.dd-message {padding:15px;color:var(--ac-muted)}
+@media(max-width:900px){.dd-sidebar{width:210px}.dd-content{padding:18px 14px}}
+@media(max-width:650px){.dd-body{display:block}.dd-sidebar{width:auto;border-right:0;border-bottom:1px solid var(--ac-border)}.dd-list{max-height:170px}.dd-content{padding:16px 10px}.dd-calendar .fc-axis{width:30px!important}.dd-editor{padding:12px}.dd-calendar th{font-size:9px}}
 .ac-main {min-width:0;flex:1;display:flex;flex-direction:column}
 .ac-topbar {min-height:66px;display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid var(--ac-border);gap:14px}
 .ac-topbar h1 {font-size:19px;font-weight:500;margin:0 0 3px;color:var(--ac-ink)}

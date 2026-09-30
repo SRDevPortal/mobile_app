@@ -44,7 +44,8 @@ def list_doctors():
                                fields=["name"], limit_page_length=0, order_by="practitioner_name asc"):
         doc = _practitioner(row.name)
         schedules = _schedules(doc)
-        if schedules:
+        if schedules or frappe.db.exists("Doctor Availability Exception", {
+            "practitioner": doc.name, "date": [">=", getdate()], "unavailable": 0}):
             doctors.append(_public_doctor(doc, schedules))
     return {"doctors": doctors, "timezone": get_system_timezone()}
 
@@ -70,7 +71,15 @@ def _bookings(doc, date, exclude_booking_id=None, lock=False):
 def _availability(doc, date, exclude_booking_id=None, lock=False):
     if doc.status != "Active":
         return []
-    return available_slots(getdate(date), _schedules(doc),
+    override_name = frappe.db.get_value("Doctor Availability Exception",
+        {"practitioner": doc.name, "date": getdate(date)}, "name")
+    if override_name:
+        override = frappe.get_doc("Doctor Availability Exception", override_name)
+        # A dated replacement has no recurring Practitioner Schedule link.
+        schedules = [] if override.unavailable else [{"name": "", "time_slots": override.time_slots}]
+    else:
+        schedules = _schedules(doc)
+    return available_slots(getdate(date), schedules,
                            _bookings(doc, date, exclude_booking_id, lock), now_datetime())
 
 

@@ -3,6 +3,13 @@
     const API = "mobile_app.api.appointment_calendar";
     const esc = value => frappe.utils.escape_html(String(value == null ? "" : value));
     const icon = name => frappe.utils.icon(name, "sm");
+    const clinicIcon = name => {
+        const shapes = {
+            encounters: '<path d="M9 4H6a2 2 0 0 0-2 2v14h16V6a2 2 0 0 0-2-2h-3"/><rect x="9" y="2" width="6" height="4" rx="1"/><path d="M8 11h8M8 15h5"/>',
+            doctors: '<circle cx="12" cy="6" r="3"/><path d="M4 21v-3a8 8 0 0 1 16 0v3M8 12v4a2 2 0 0 0 4 0v-5M16 13v3"/><circle cx="16" cy="18" r="2"/>',
+        };
+        return `<svg class="ac-clinic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${shapes[name]}</svg>`;
+    };
     // Dark doctor colours keep white appointment labels legible in every view.
     const colors = ["#176b63", "#456579", "#316596", "#667333", "#885367", "#366b4b"];
     const labels = {approve: "Approve appointment", cancel: "Cancel appointment", check_in: "Check in", claim: "Take responsibility"};
@@ -67,9 +74,9 @@
             this.$root = $(`<div class="ac-shell">
                 <nav class="ac-rail" aria-label="Clinic navigation">
                     <span class="ac-brand" title="Clinic Calendar">${icon("calendar")}</span>
-                    <button class="ac-rail-link active" data-action="today" aria-label="Calendar">${icon("calendar")}</button>
-                    <button class="ac-rail-link" data-action="encounters" aria-label="Patient encounters">${icon("file")}</button>
-                    <button class="ac-rail-link" data-action="workspace" aria-label="Mobile app workspace">${icon("es-line-home")}</button>
+                    <button class="ac-rail-link active" data-action="calendar" aria-label="Appointment calendar" title="Appointment calendar" aria-current="page">${icon("calendar")}</button>
+                    <button class="ac-rail-link" data-action="encounters" aria-label="Patient Encounter" title="Patient Encounter">${clinicIcon("encounters")}</button>
+                    <button class="ac-rail-link" data-action="doctors" aria-label="Doctors" title="Doctors">${clinicIcon("doctors")}</button>
                 </nav>
                 <main class="ac-main">
                     <header class="ac-topbar"><div><h1>Appointment Calendar</h1><span class="ac-subtitle">Bookings, approvals and patient queue</span></div>
@@ -107,6 +114,8 @@
                     <footer class="ac-footer"><span class="ac-update">Loading appointments...</span><span>Calendar times follow the clinic timezone &middot; Checks for new appointments every 15 seconds</span></footer>
                 </main></div>`).appendTo(this.page.main.empty());
             this.$cal = this.$root.find(".ac-calendar");
+            this.$directory = $('<section class="dd-view" hidden aria-label="Doctors and availability"></section>').appendTo(this.$root.find(".ac-main"));
+            this.directory = new mobile_app.DoctorDirectory(this, this.$directory);
             this.$cal[0].style.setProperty("--ac-slot-height", `${30 * this.zoom / 100}px`);
         }
         bind() {
@@ -304,7 +313,7 @@
                 !data.appointments.some(row => row.id === this.selected.id)) this.close();
             this.receptionOnly = Boolean(data.reception_only);
             this.$root.find('[data-action="new"], [data-action="encounters"]').prop("hidden", this.receptionOnly);
-            this.$root.find(".ac-subtitle").text(this.receptionOnly ? "Approved appointments and completed check-ins" : "Bookings, approvals and patient queue");
+            this.$root.find(".ac-main > .ac-topbar .ac-subtitle").text(this.receptionOnly ? "Approved appointments and completed check-ins" : "Bookings, approvals and patient queue");
             if (this.receptionOnly && !["All", "Approved", "Checked In"].includes(this.queue)) this.queue = "All";
             this.$root.find(".ac-timezone").text(data.timezone);
             this.$root.find(".ac-notice").prop("hidden", true);
@@ -333,6 +342,7 @@
 
         }
         async fetch(force = false, background = false) {
+            if (this.section === "doctors") return;
             if (!this.range || !activeRoute() || !$(this.wrapper).is(":visible")) return;
             const {start, end} = this.range;
             const rangeKey = `${start.format("YYYY-MM-DD")}:${end.format("YYYY-MM-DD")}`;
@@ -534,8 +544,9 @@
             if (action === "view") {this.customRange = null; const v = button.data("view");this.$root.find(".ac-views .ac-btn").removeClass("selected");button.addClass("selected");this.$cal.fullCalendar("changeView",{Day:"agendaDay",Week:"agendaWeek",Month:"month"}[v],this.date.clone());this.$cal.fullCalendar("option", "height", this.height());return;}
             if (action === "refresh") return this.fetch();
             if (action === "close") return this.close();
-            if (action === "workspace") return frappe.set_route("Workspaces","Mobile App");
-            if (action === "encounters") return frappe.set_route("List","Patient Encounter");
+            if (action === "doctors") return this.switchSection("doctors");
+            if (action === "calendar") return this.directory.leaveDraft(() => this.switchSection("calendar"));
+            if (action === "encounters") return this.directory.leaveDraft(() => frappe.set_route("List","Patient Encounter"));
             if (action === "new") return frappe.new_doc("Patient Encounter",{sr_encounter_type:"Appointment",pe_appointment_date:this.date.format("YYYY-MM-DD")});
             if (action === "source") {
                 this.calendarScroll = this.$cal.find(".fc-time-grid-container").scrollTop() ?? this.calendarScroll;
@@ -556,11 +567,26 @@
                 this.selected = result;this.renderDetail(result);this.renderDoctors();this.renderQueue();this.syncEvents();frappe.show_alert({message:"Appointment updated",indicator:"green"});
             } catch (error) { /* Frappe presents the server validation message. */ } finally {this.mutating = false;this.$root.find(".ac-detail-actions button").prop("disabled",false);this.fetch(true);}
         }
+        switchSection(section) {
+            this.section = section;
+            const doctors = section === "doctors";
+            if (doctors) {
+                this.calendarXHR?.abort(); ++this.request;
+                this.loading = false; this.loadingRange = null;
+            }
+            this.$root.find(".ac-main").children().not(this.$directory).toggleClass("dd-hidden", doctors);
+            this.$directory.prop("hidden", !doctors);
+            this.$root.find(".ac-rail-link").removeClass("active").removeAttr("aria-current")
+                .filter(`[data-action="${section}"]`).addClass("active").attr("aria-current", "page");
+            if (doctors) this.directory.show();
+            else {this.$cal.fullCalendar("render"); this.fetch(true);}
+        }
         show() {
             document.body.classList.add("ma-calendar-active");
             clearTimeout(this.showTimer);
             this.showTimer = setTimeout(() => {
                 if (!activeRoute()) return;
+                if (this.section === "doctors") {this.directory.show(); return;}
                 this.drawing = true;
                 this.$cal.fullCalendar("render");
                 if (this.calendarScroll != null) this.$cal.find(".fc-time-grid-container").scrollTop(this.calendarScroll);
@@ -578,7 +604,7 @@
         }
     }
     frappe.pages["doctor-clinical"].on_page_load = wrapper => {
-        frappe.require(["/assets/frappe/js/lib/fullcalendar/fullcalendar.min.css","/assets/frappe/js/lib/fullcalendar/fullcalendar.min.js","/assets/mobile_app/css/doctor_clinical.css"],()=>{
+        frappe.require(["/assets/frappe/js/lib/fullcalendar/fullcalendar.min.css","/assets/frappe/js/lib/fullcalendar/fullcalendar.min.js","/assets/mobile_app/css/doctor_clinical.css","/assets/mobile_app/js/doctor_directory.js"],()=>{
             wrapper.appointment_calendar = new AppointmentCalendar(wrapper);
             if(activeRoute()) wrapper.appointment_calendar.show();
         });

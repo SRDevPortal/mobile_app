@@ -297,7 +297,7 @@ doc_events = {
 for _doctype in (
     "Mobile App User", "Mobile App Appointment", "App Support Ticket",
     "Patient Encounter", "Healthcare Practitioner", "Patient",
-    "Mobile Appointment Workflow", "Clinic Appointment",
+    "Mobile Appointment Workflow", "Clinic Appointment", "Practitioner Schedule", "Doctor Availability Exception",
 ):
     doc_events.setdefault(_doctype, {}).update({
         "on_change": "mobile_app.realtime.notify_change",
