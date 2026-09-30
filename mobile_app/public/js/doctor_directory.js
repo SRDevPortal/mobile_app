@@ -44,7 +44,7 @@ frappe.provide("mobile_app");
             });
             else fn();
         }
-        async show() { if (!this.doctors.length) await this.refresh(); else if (!this.dirty) await this.load(); }
+        async show() { if (!this.saving && !this.dirty) await this.refresh(); }
         async refresh() {
             const serial = ++this.serial;
             this.$root.find(".dd-message").prop("hidden", false).text("Loading doctors...");

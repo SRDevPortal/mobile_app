@@ -35,7 +35,8 @@ def _details(doc):
 @frappe.whitelist()
 def list_doctors():
     return {"doctors": [_details(_practitioner(row.name)) for row in frappe.get_list(
-        "Healthcare Practitioner", fields=["name"], order_by="practitioner_name asc", limit_page_length=0)],
+        "Healthcare Practitioner", filters={"status": "Active"}, fields=["name"],
+        order_by="practitioner_name asc", limit_page_length=0)],
         "timezone": get_system_timezone()}
 
 
