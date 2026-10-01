@@ -384,11 +384,12 @@ def agent_query(doctype, txt, searchfield, start, page_len, filters=None):
         })
 
 
-def _sync_clinic_status(doc, status):
+def _sync_clinic_status(doc, status, *, skip_invalid_links=False):
     """Update the linked scheduling record in the same transaction as the queue.
 
     Clinical/billing encounter statuses are separate. A status-only database update
     avoids reverse-sync hooks and booking-time validations on an existing visit.
+    Historical setup may skip stale links without changing their ownership.
     """
     if doc.doctype != "Patient Encounter" or not frappe.db.exists("DocType", "Clinic Appointment"):
         return
@@ -400,9 +401,21 @@ def _sync_clinic_status(doc, status):
         "Clinic Appointment", {"encounter_reference": doc.name}, "name")
     if not linked:
         return
+    if skip_invalid_links and not frappe.db.exists("Clinic Appointment", linked):
+        frappe.logger("mobile_app").warning(
+            "Skipping clinic status sync for encounter %s: appointment %s is missing",
+            doc.name, linked,
+        )
+        return
     # Require a reciprocal link before changing another application's record.
     clinic = frappe.get_doc("Clinic Appointment", linked)
     if clinic.encounter_reference != doc.name:
+        if skip_invalid_links:
+            frappe.logger("mobile_app").warning(
+                "Skipping clinic status sync for encounter %s: appointment %s links to encounter %s",
+                doc.name, linked, clinic.encounter_reference,
+            )
+            return
         frappe.throw(_("The linked Clinic Appointment belongs to another encounter."))
     if clinic.appointment_status != mapped:
         frappe.db.set_value("Clinic Appointment", linked, "appointment_status", mapped)

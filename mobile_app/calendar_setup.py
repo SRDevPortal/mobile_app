@@ -38,7 +38,7 @@ def setup_encounter_status():
         doc = frappe.get_doc("Patient Encounter", name)
         status = _status(doc, _workflow(doc.doctype, doc.name))
         _sync_encounter_status(doc, status)
-        _sync_clinic_status(doc, status)
+        _sync_clinic_status(doc, status, skip_invalid_links=True)
 
 
 def setup_calendar_indexes():
