@@ -24,7 +24,7 @@ class TestAppointmentCalendar(unittest.TestCase):
         frappe.get_doc({"doctype": "Mobile App Appointment", "name": self.name,
             "appointment_external_id": self.name, "patient_name": "Calendar Test Patient",
             "appointment_date": "2099-01-10", "appointment_time": "10:00:00",
-            "doctor_user": self.doctor, "doctor_name": "Test Doctor", "status": "Booked"}).db_insert()
+            "doctor_user": self.doctor, "doctor_name": "Test Doctor", "status": "Booked", "is_online": 1}).db_insert()
         self.role_patch = patch.object(frappe, "get_roles", side_effect=lambda user=None: self.roles.get(user or frappe.session.user, []))
         self.role_patch.start()
         frappe.set_user("Administrator")
@@ -144,7 +144,7 @@ class TestAppointmentCalendar(unittest.TestCase):
                        "patient_name": "Calendar Patient Name", "mobile": "7700900123"}).db_insert()
         frappe.get_doc({"doctype": "Patient Encounter", "name": encounter,
             "patient": patient, "sr_encounter_type": "Appointment",
-            "sr_encounter_status": "Draft", "encounter_reference": clinic,
+            "sr_encounter_status": "Draft", "encounter_reference": clinic, "sr_encounter_place": "Online",
             "pe_appointment_date": "2099-01-10", "pe_appointment_time": "10:00:00"}).db_insert()
         frappe.get_doc({"doctype": "Clinic Appointment", "name": clinic,
             "encounter_reference": encounter, "appointment_status": "Draft"}).db_insert()
@@ -262,7 +262,7 @@ class TestAppointmentCalendar(unittest.TestCase):
     def test_patient_encounter_status_is_synced_and_cannot_be_forged(self):
         name = "calendar-status-" + self.suffix
         doc = frappe.get_doc({"doctype":"Patient Encounter", "name":name,
-            "sr_encounter_type":"Appointment", "custom_appointment_status":"Approved"})
+            "sr_encounter_type":"Appointment", "sr_encounter_place":"Online", "custom_appointment_status":"Approved"})
         api.sync_encounter_status(doc)
         self.assertEqual(doc.custom_appointment_status, "Pending")
         doc.db_insert()

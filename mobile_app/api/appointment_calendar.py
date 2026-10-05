@@ -37,7 +37,7 @@ def _key(doctype, name):
 
 
 def _workflow(doctype, name):
-    return frappe.db.get_value(WORKFLOW, _key(doctype, name), "*", as_dict=True) or frappe._dict()
+    return frappe.db.get_value(WORKFLOW, _key(doctype, name), "*", as_dict=True, for_update=bool(frappe.flags.in_opd_mutation or frappe.flags.opd_checkin)) or frappe._dict()
 
 
 def _source(doctype, name, lock=False):
@@ -46,7 +46,7 @@ def _source(doctype, name, lock=False):
     if lock:
         # Lock the source even before a workflow exists, serializing first-time decisions.
         frappe.db.sql(f"SELECT name FROM `tab{doctype}` WHERE name=%s FOR UPDATE", (name,))
-    doc = frappe.get_doc(doctype, name)
+    doc = frappe.get_doc(doctype, name, for_update=lock)
     if doctype == "Patient Encounter" and doc.get("sr_encounter_type") != "Appointment":
         frappe.throw(_("This encounter is not an appointment."))
     return doc
@@ -153,6 +153,12 @@ def _serialize(doc, workflow, context, details=False):
                status=_status(doc, workflow), online=online, assigned_agent=_agent(doc, workflow),
                actions=_actions(doc, workflow, context), encounter=encounter,
                checked_in_at=workflow.get("checked_in_at"))
+    if details:
+        from mobile_app.api.opd_queue import find_visit
+        visit = find_visit(doc.doctype, doc.name)
+        from mobile_app import opd_store
+        out['opd_visit'] = opd_store.value('Visit', visit,
+            ['name', 'clinic', 'token_number', 'department', 'status', 'stage_index'], as_dict=True) if visit else None
     if details:
         out.update(notes=doc.get("sr_notes") or doc.get("page_url_disease") or "",
                    meet_link=doc.get("google_meet_link"), reason=workflow.get("decision_reason"),
@@ -324,7 +330,17 @@ def get_appointment(doctype, name):
 
 
 @frappe.whitelist(methods=["POST"])
-def update_appointment(doctype, name, action, expected_status, reason=None, agent=None):
+def update_appointment(doctype, name, action, expected_status, reason=None, agent=None,
+                       clinic=None, department=None, doctor=None, patient=None, request_id=None):
+    if action == "check_in" and not frappe.flags.opd_checkin:
+        source = _source(doctype, name)
+        online = source.get("sr_encounter_place") == "Online" if doctype == "Patient Encounter" else bool(source.get("is_online"))
+        if not online:
+            if not all((clinic, department, doctor, request_id)):
+                frappe.throw("Use OPD check-in to confirm the department, doctor and patient before issuing a token.")
+            from mobile_app.api.opd_queue import check_in
+            return check_in(clinic, request_id, department, doctor, patient=patient, source_doctype=doctype,
+                            source_name=name, expected_status=expected_status, reason=reason)
     action = "cancel" if action == "reject" else action  # Compatibility with already-open older clients.
     context = _context()
     doc = _source(doctype, name, lock=True)
@@ -406,6 +422,12 @@ def _sync_clinic_status(doc, status, *, skip_invalid_links=False):
     """
     if doc.doctype != "Patient Encounter" or not frappe.db.exists("DocType", "Clinic Appointment"):
         return
+    if status == "Checked In":
+        from mobile_app.api.opd_queue import find_visit
+        visit = find_visit(doc.doctype, doc.name)
+        from mobile_app import opd_store
+        if visit and opd_store.value("Visit", visit, "status") != "Completed":
+            return  # Check-in is not the end of an OPD consultation.
     mapped = {"Pending": "Draft", "Approved": "Confirmed", "Checked In": "Completed",
               "Cancelled": "Cancelled"}.get(status)
     if not mapped:

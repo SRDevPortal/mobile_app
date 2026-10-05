@@ -16,7 +16,14 @@
   "decision_reason",
   "checked_in_at",
   "consultation_started_at",
-  "checked_out_at"
+  "checked_out_at",
+  "opd_visit_id",
+  "opd_clinic",
+  "opd_patient",
+  "opd_status",
+  "opd_source_key",
+  "opd_token_key",
+  "opd_payload"
  ],
  "fields": [
   {
@@ -105,6 +112,60 @@
    "fieldname": "checked_out_at",
    "fieldtype": "Datetime",
    "label": "Checked Out At",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "opd_visit_id",
+   "label": "Opd Visit Id",
+   "fieldtype": "Data",
+   "read_only": 1,
+   "hidden": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "opd_clinic",
+   "label": "Opd Clinic",
+   "fieldtype": "Data",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "opd_patient",
+   "label": "Opd Patient",
+   "fieldtype": "Link",
+   "read_only": 1,
+   "hidden": 1,
+   "options": "Patient"
+  },
+  {
+   "fieldname": "opd_status",
+   "label": "Opd Status",
+   "fieldtype": "Select",
+   "read_only": 1,
+   "hidden": 1,
+   "options": "\nActive\nCompleted\nWithdrawn"
+  },
+  {
+   "fieldname": "opd_source_key",
+   "label": "Opd Source Key",
+   "fieldtype": "Data",
+   "read_only": 1,
+   "hidden": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "opd_token_key",
+   "label": "Opd Token Key",
+   "fieldtype": "Data",
+   "read_only": 1,
+   "hidden": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "opd_payload",
+   "label": "Opd Payload",
+   "fieldtype": "Long Text",
    "read_only": 1,
    "hidden": 1
   }

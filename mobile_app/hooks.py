@@ -7,10 +7,12 @@ app_license = "mit"
 
 after_install = [
     "mobile_app.calendar_setup.after_migrate",
+    "mobile_app.opd_setup.after_migrate",
     "mobile_app.practitioner_setup.setup_practitioner_diseases",
 ]
 after_migrate = [
     "mobile_app.calendar_setup.after_migrate",
+    "mobile_app.opd_setup.after_migrate",
     "mobile_app.practitioner_setup.setup_practitioner_diseases",
 ]
 boot_session = "mobile_app.realtime.boot_session"
@@ -303,3 +305,10 @@ for _doctype in (
         "on_change": "mobile_app.realtime.notify_change",
         "after_delete": "mobile_app.realtime.notify_change",
     })
+
+
+
+doc_events.setdefault("Clinic Appointment", {})["before_validate"] = "mobile_app.api.opd_queue.preserve_clinic_progress"
+
+doc_events.setdefault("Healthcare Settings", {})["validate"] = "mobile_app.opd_store.protect_settings"
+doc_events.setdefault("Mobile Appointment Workflow", {})["validate"] = "mobile_app.opd_store.protect_workflow"

@@ -1,0 +1,20 @@
+{
+  "doctype": "Page",
+  "name": "opd-display",
+  "page_name": "opd-display",
+  "title": "OPD Waiting Room",
+  "module": "MobileApp",
+  "standard": "Yes",
+  "system_page": 0,
+  "roles": [
+    {
+      "role": "System Manager"
+    },
+    {
+      "role": "Appointment Manager"
+    },
+    {
+      "role": "OPD Display"
+    }
+  ]
+}

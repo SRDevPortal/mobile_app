@@ -47,9 +47,12 @@
             this.doctor = ""; this.channel = "All"; this.queue = "All"; this.search = ""; this.rows = []; this.doctors = [];
             this.request = 0; this.detailRequest = 0; this.colors = {};
             this.canCreate = frappe.model.can_create("Patient Encounter");
+            this.opdOnly = (frappe.user_roles || []).includes("OPD Staff") && !(frappe.user_roles || []).some(r => ["System Manager","Appointment Manager","Appointment Receptionist","Agent","Appointment Agent","Physician","Healthcare Practitioner","Mobile App Doctor"].includes(r));
+            if (this.opdOnly) this.section = "opd";
             this.render();
             this.bind();
             this.initCalendar();
+            if (this.opdOnly) { this.$root.find('[data-action="calendar"], [data-action="doctors"], [data-action="encounters"]').hide(); this.switchSection("opd"); }
             mobile_app.realtime.watch("calendar", ["Mobile App Appointment", "Patient Encounter",
                 "Mobile Appointment Workflow", "Healthcare Practitioner", "Patient", "Clinic Appointment"],
                 () => activeRoute() && $(this.wrapper).is(":visible"),
@@ -77,6 +80,7 @@
                     <button class="ac-rail-link active" data-action="calendar" aria-label="Appointment calendar" title="Appointment calendar" aria-current="page">${icon("calendar")}</button>
                     <button class="ac-rail-link" data-action="encounters" aria-label="Patient Encounter" title="Patient Encounter">${clinicIcon("encounters")}</button>
                     <button class="ac-rail-link" data-action="doctors" aria-label="Doctors" title="Doctors">${clinicIcon("doctors")}</button>
+                <button class="ac-rail-link" data-action="opd" aria-label="OPD tokens and rooms" title="OPD tokens and rooms">OPD</button>
                 </nav>
                 <main class="ac-main">
                     <header class="ac-topbar"><div><h1>Appointment Calendar</h1><span class="ac-subtitle">Bookings, approvals and patient queue</span></div>
@@ -116,6 +120,8 @@
             this.$cal = this.$root.find(".ac-calendar");
             this.$directory = $('<section class="dd-view" hidden aria-label="Doctors and availability"></section>').appendTo(this.$root.find(".ac-main"));
             this.directory = new mobile_app.DoctorDirectory(this, this.$directory);
+            this.$opd = $('<section class="ac-opd-view" hidden aria-label="OPD tokens and rooms"></section>').appendTo(this.$root.find(".ac-main"));
+            this.opd = new mobile_app.OPDPortal(this.$opd[0], false, this);
             this.$cal[0].style.setProperty("--ac-slot-height", `${30 * this.zoom / 100}px`);
         }
         bind() {
@@ -342,7 +348,7 @@
 
         }
         async fetch(force = false, background = false) {
-            if (this.section === "doctors") return;
+            if (["doctors", "opd"].includes(this.section)) return;
             if (!this.range || !activeRoute() || !$(this.wrapper).is(":visible")) return;
             const {start, end} = this.range;
             const rangeKey = `${start.format("YYYY-MM-DD")}:${end.format("YYYY-MM-DD")}`;
@@ -513,12 +519,15 @@
             const meet = /^https:\/\/meet\.google\.com\//i.test(r.meet_link || "") ? `<a class="ac-btn" target="_blank" rel="noopener noreferrer" href="${esc(r.meet_link)}">Join video consultation</a>` : "";
             this.$root.find(".ac-detail-view").html(`<div class="ac-detail-top">${this.button("close", `${icon("es-line-left-chevron")} Appointments`)}<span class="ac-badge ${statusClass(r.status)}">${statusMark(r.status)}${esc(r.status)}</span></div>
                 <div class="ac-patient-heading"><span class="ac-eyebrow">APPOINTMENT DETAILS</span><h2>${esc(r.patient_name)}</h2><p>${esc(moment(r.date).format("dddd, D MMMM"))} &middot; ${esc(moment(r.time,"HH:mm:ss").format("h:mm A"))}</p></div>
-                <div class="ac-detail-scroll"><dl>${field("Doctor",r.doctor_name)}${field("Appointment mode",r.online ? "Online" : "In clinic")}${field("Phone",r.phone)}${field("Email",r.email)}${field("Patient",r.patient)}${field("Booking",r.name)}${field("Assigned agent",r.assigned_agent || "Unassigned")}${field("Encounter",r.encounter)}${field("Notes",r.notes)}${field("Decision reason",r.reason)}${field("Decision by",r.decision_by)}${field("Decision time",stamp(r.decision_at))}${field("Checked in",stamp(r.checked_in_at))}</dl>
+                <div class="ac-detail-scroll"><dl>${field("OPD token",r.opd_visit ? String(r.opd_visit.token_number).padStart(3,"0") : "")}${field("Doctor",r.doctor_name)}${field("Appointment mode",r.online ? "Online" : "In clinic")}${field("Phone",r.phone)}${field("Email",r.email)}${field("Patient",r.patient)}${field("Booking",r.name)}${field("Assigned agent",r.assigned_agent || "Unassigned")}${field("Encounter",r.encounter)}${field("Notes",r.notes)}${field("Decision reason",r.reason)}${field("Decision by",r.decision_by)}${field("Decision time",stamp(r.decision_at))}${field("Checked in",stamp(r.checked_in_at))}</dl>
                 ${history.length ? `<details class="ac-history"><summary>Activity history</summary>${history.map(h => `<div><small>${esc(stamp(h.creation))} | ${esc(h.comment_by)}</small><p>${esc($('<div>').html(h.content).text())}</p></div>`).join("")}</details>` : ""}</div>
                 <div class="ac-detail-actions">${r.actions.map(a => this.button(a,labels[a],a === "cancel" ? "ac-danger" : "ac-primary")).join("")}${this.canAssign && !["Checked In","Cancelled"].includes(r.status) ? this.button("assign","Assign agent") : ""}${meet}${r.can_open_source ? this.button("source",r.encounter ? "Open Patient Encounter" : "Open booking record") : ""}${!r.actions.length && !["Checked In","Cancelled"].includes(r.status) ? '<p class="ac-muted">Actions are available to the responsible agent or assigned doctor.</p>' : ""}</div>`);
         }
         close() {this.selected = null; ++this.detailRequest; this.$root.find(".ac-detail-view").prop("hidden",true);this.$root.find(".ac-queue-view").prop("hidden",false);this.renderQueue();}
         action(action, button) {
+            if (action === "opd") return this.directory.leaveDraft(() => this.switchSection("opd"));
+            if (action === "encounters" && this.section === "opd" && this.opd.dirty) return frappe.confirm("Discard unsaved OPD setup changes?", () => {this.opd.dirty = false; this.action(action, button);});
+            if (action === "check_in" && this.selected && !this.selected.online) return mobile_app.opd_checkin(this.selected, () => { this.close(); this.fetch(true); });
             if (action === "apply-range") return this.applyRange(this.$root.find(".ac-range-from").val(), this.$root.find(".ac-range-to").val());
             if (action === "view" && button.data("view") === "Range") {
                 const from = this.customRange?.from || this.range.start.format("YYYY-MM-DD");
@@ -569,17 +578,25 @@
             } catch (error) { /* Frappe presents the server validation message. */ } finally {this.mutating = false;this.$root.find(".ac-detail-actions button").prop("disabled",false);this.fetch(true);}
         }
         switchSection(section) {
+            if (this.opdOnly && section !== "opd") return;
+            if (this.section === 'opd' && this.opd.dirty && section !== 'opd') {
+                frappe.confirm('Discard unsaved OPD setup changes?', () => {this.opd.dirty = false; this.switchSection(section);});
+                return;
+            }
             this.section = section;
-            const doctors = section === "doctors";
-            if (doctors) {
+            const doctors = section === "doctors", opd = section === "opd";
+            if (doctors || opd) {
                 this.calendarXHR?.abort(); ++this.request;
                 this.loading = false; this.loadingRange = null;
             }
-            this.$root.find(".ac-main").children().not(this.$directory).toggleClass("dd-hidden", doctors);
+            this.$root.find(".ac-main").children().not(this.$directory).not(this.$opd).toggleClass("dd-hidden", doctors || opd);
             this.$directory.prop("hidden", !doctors);
+            this.$opd.prop("hidden", !opd);
             this.$root.find(".ac-rail-link").removeClass("active").removeAttr("aria-current")
                 .filter(`[data-action="${section}"]`).addClass("active").attr("aria-current", "page");
-            if (doctors) this.directory.show();
+            if (!opd) this.opd.hide();
+            if (opd) this.opd.show();
+            else if (doctors) this.directory.show();
             else {this.$cal.fullCalendar("render"); this.fetch(true);}
         }
         show() {
@@ -587,6 +604,7 @@
             clearTimeout(this.showTimer);
             this.showTimer = setTimeout(() => {
                 if (!activeRoute()) return;
+                if (this.section === "opd") {this.opd.show(); return;}
                 if (this.section === "doctors") {this.directory.show(); return;}
                 this.drawing = true;
                 this.$cal.fullCalendar("render");
@@ -596,6 +614,7 @@
             }, 50);
         }
         hide() {
+            this.opd?.hide();
             clearTimeout(this.showTimer);
             ++this.request; ++this.detailRequest;
             this.calendarXHR?.abort();
@@ -605,7 +624,7 @@
         }
     }
     frappe.pages["doctor-clinical"].on_page_load = wrapper => {
-        frappe.require(["/assets/frappe/js/lib/fullcalendar/fullcalendar.min.css","/assets/frappe/js/lib/fullcalendar/fullcalendar.min.js","/assets/mobile_app/css/doctor_clinical.css","/assets/mobile_app/js/doctor_directory.js"],()=>{
+        frappe.require(["/assets/frappe/js/lib/fullcalendar/fullcalendar.min.css","/assets/frappe/js/lib/fullcalendar/fullcalendar.min.js","/assets/mobile_app/css/doctor_clinical.css","/assets/mobile_app/js/doctor_directory.js","/assets/mobile_app/css/opd_queue.css","/assets/mobile_app/js/opd_queue.js"],()=>{
             wrapper.appointment_calendar = new AppointmentCalendar(wrapper);
             if(activeRoute()) wrapper.appointment_calendar.show();
         });
