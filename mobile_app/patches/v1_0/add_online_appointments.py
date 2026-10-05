@@ -12,5 +12,6 @@ def execute():
         "fieldtype": "Check",
         "insert_after": "status",
         "default": "0",
+        "hidden": 1,
         "description": "Show this practitioner for online consultations in the mobile app.",
     }]})

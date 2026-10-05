@@ -53,20 +53,33 @@ def _source(doctype, name, lock=False):
 
 
 def _doctor(doc):
-    if doc.doctype == "Patient Encounter":
-        practitioner = doc.get("pe_practitioner") or doc.get("practitioner")
-        if practitioner:
-            cache = getattr(frappe.local, "appointment_calendar_doctors", None)
-            if cache is None:
-                cache = frappe.local.appointment_calendar_doctors = {}
-            if practitioner not in cache:
-                cache[practitioner] = frappe.db.get_value("Healthcare Practitioner", practitioner,
-                    ["practitioner_name", "user_id"], as_dict=True) or {}
-            data = cache[practitioner]
-            return practitioner, data.get("practitioner_name") or practitioner, data.get("user_id")
-        return "unassigned", _("Unassigned doctor"), None
+    practitioner = (doc.get("pe_practitioner") or doc.get("practitioner")) if doc.doctype == "Patient Encounter" else doc.get("practitioner_id")
     user = doc.get("doctor_user")
     name = doc.get("doctor_name") or user or _("Unassigned doctor")
+    if not practitioner and doc.doctype != "Patient Encounter":
+        # Legacy mobile bookings have no Link. Resolve only unique identities;
+        # never collapse different practitioners merely because names overlap.
+        roster = getattr(frappe.local, "appointment_calendar_identity_roster", None)
+        if roster is None:
+            roster = frappe.local.appointment_calendar_identity_roster = frappe.get_all(
+                "Healthcare Practitioner", fields=["name", "practitioner_name", "user_id"], limit_page_length=0)
+        matches = [p for p in roster if user and p.user_id == user]
+        if not matches and doc.get("doctor_name"):
+            normalize = lambda value: " ".join((value or "").casefold().split())
+            matches = [p for p in roster if normalize(p.practitioner_name) == normalize(doc.doctor_name)]
+        if len(matches) == 1:
+            practitioner = matches[0].name
+    if practitioner:
+        cache = getattr(frappe.local, "appointment_calendar_doctors", None)
+        if cache is None:
+            cache = frappe.local.appointment_calendar_doctors = {}
+        if practitioner not in cache:
+            cache[practitioner] = frappe.db.get_value("Healthcare Practitioner", practitioner,
+                ["practitioner_name", "user_id"], as_dict=True) or {}
+        data = cache[practitioner]
+        return practitioner, data.get("practitioner_name") or name, user or data.get("user_id")
+    if doc.doctype == "Patient Encounter":
+        return "unassigned", _("Unassigned doctor"), None
     return user or doc.get("doctor_name") or "unassigned", name, user
 
 
@@ -261,7 +274,7 @@ def get_calendar(start, end):
             row.sr_pe_mobile = row.sr_pe_mobile or patient.get("mobile")
             rows.append(row)
     mobile = frappe.get_all("Mobile App Appointment", filters={"appointment_date": ["between", [start, end - timedelta(days=1)]]},
-        fields=["name", "patient_encounter", "patient_name", "doctor_user", "doctor_name",
+        fields=["name", "patient_encounter", "patient_name", "doctor_user", "doctor_name", "practitioner_id",
                 "mobile_number", "email", "mobile_app_user", "booking_id",
                 "appointment_date", "appointment_time", "status", "docstatus", "is_online", "assigned_agent"],
         limit_page_length=2001)
@@ -277,8 +290,8 @@ def get_calendar(start, end):
     workflows = {row.name: row for row in frappe.get_all(WORKFLOW,
         filters={"name": ["in", keys]}, fields=["*"], limit_page_length=0)} if keys else {}
     # Resolve practitioners in one query, including inactive doctors on older bookings.
-    practitioner_ids = {row.get("pe_practitioner") or row.get("practitioner")
-                        for row in rows if row.doctype == "Patient Encounter"}
+    practitioner_ids = {row.get("pe_practitioner") or row.get("practitioner") or row.get("practitioner_id")
+                        for row in rows}
     practitioner_ids.discard(None)
     practitioner_ids.discard("")
     frappe.local.appointment_calendar_doctors = {name: {} for name in practitioner_ids}

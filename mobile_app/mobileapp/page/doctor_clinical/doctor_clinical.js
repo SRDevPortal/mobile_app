@@ -460,7 +460,8 @@
                 if (!groups.has(r.doctor_id)) groups.set(r.doctor_id, {name: r.doctor_name, count: 0, awaiting: 0});
             });
             if (this.doctor && !groups.has(this.doctor)) this.doctor = "";
-            this.filtered().forEach(r => {
+            // Sidebar counts cover the period, channel and status, regardless of selected doctor.
+            this.rows.filter(r => this.matches(r, true, false)).forEach(r => {
                 const d = groups.get(r.doctor_id);
                 d.count++;
                 if (["Pending", "Approved"].includes(r.status)) d.awaiting++;
