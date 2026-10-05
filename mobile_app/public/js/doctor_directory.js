@@ -91,6 +91,13 @@ frappe.provide("mobile_app");
                 <p>Diseases: ${esc((d.diseases || []).join(", ") || "No diseases selected")}</p></div>
                 <span class="dd-status">${esc(d.status)}</span><button class="ac-btn" data-dd="profile">${d.can_edit ? "Edit doctor details" : "View doctor details"}</button></div>
                 <div class="dd-contact"><span>Phone: ${esc(d.phone || "Not provided")}</span><span>Email: ${esc(d.email || "Not provided")}</span></div>
+                <fieldset class="dd-online-setting" ${d.can_edit ? "" : "disabled"} style="margin:16px 0;padding:16px;border:1px solid #dce5e3;border-radius:12px">
+                    <legend style="font-size:16px">Online appointments</legend>
+                    <label><input type="checkbox" class="dd-online-enabled" ${d.accepts_online_appointments ? "checked" : ""}> Accept online appointments</label>
+                    <p class="dd-note">Only marked doctors appear for online consultations in the mobile app.</p>
+                    <button class="ac-btn ac-primary" data-dd="save-online">Save online availability</button>
+                    <div class="dd-online-error" role="alert"></div>
+                </fieldset>
                 <div class="dd-mode" role="group" aria-label="Availability editing mode">
                     <button class="ac-btn dd-setting" data-dd="weekly"><strong>Working Schedule</strong><span>Set weekly days and working hours</span></button>
                     <button class="ac-btn dd-setting" data-dd="date"><strong>Leave / Holiday</strong><span>Mark a single day or a date range</span></button>
@@ -228,6 +235,7 @@ frappe.provide("mobile_app");
         }
         action(action) {
             if (this.saving) return;
+            if (action === "save-online") return this.leaveDraft(() => this.saveOnline());
             if (action === "refresh") return this.leaveDraft(() => this.refresh());
             if (action === "profile") return this.leaveDraft(() => frappe.set_route("Form", "Healthcare Practitioner", this.selected));
             if (["prev", "next", "today"].includes(action)) return this.leaveDraft(() => {
@@ -238,6 +246,24 @@ frappe.provide("mobile_app");
             if (action === "remove-leave") return this.saveLeave(true);
             if (action === "reset") return this.leaveDraft(() => this.load());
             if (action === "save") return this.save();
+        }
+        async saveOnline() {
+            if (this.saving || !this.data.doctor.can_edit) return;
+            const enabled = this.$root.find('.dd-online-enabled').prop('checked');
+            this.saving = true;
+            this.$root.find('.dd-online-setting').prop('disabled', true);
+            try {
+                await frappe.xcall(`${API}.set_online_appointments`, {
+                    practitioner_id: this.selected, doctor_modified: this.data.doctor.modified, enabled: enabled ? 1 : 0
+                });
+                await this.load();
+                frappe.show_alert({message: 'Online availability saved', indicator: 'green'});
+            } catch (e) {
+                this.$root.find('.dd-online-error').text('Online availability was not saved. Refresh doctor details and try again.');
+            } finally {
+                this.saving = false;
+                this.$root.find('.dd-online-setting').prop('disabled', !this.data.doctor.can_edit);
+            }
         }
         async save() {
             if (this.saving || this.mode !== "weekly") return;

@@ -32,6 +32,7 @@ def _public_doctor(doc, schedules):
     return {"id": doc.name, "name": doc.practitioner_name or doc.name,
             "specialty": doc.get("sr_qualification") or doc.get("department") or "",
             "tags": tags, "image_url": doc.get("image") or "", "is_active": True,
+            "accepts_online_appointments": bool(frappe.utils.cint(doc.get("custom_accept_online_appointments"))),
             "schedules": [{"id": s["name"], "service_unit": s.get("service_unit") or "",
                            "days": sorted({r.day for r in s["time_slots"]})} for s in schedules]}
 
@@ -96,7 +97,7 @@ def validate_appointment(doc):
     if not doc.get("practitioner_id"):
         return  # Historical appointments retain their original identity.
     old = doc.get_doc_before_save()
-    fields = ("practitioner_id", "practitioner_schedule", "appointment_date", "appointment_time", "status")
+    fields = ("practitioner_id", "practitioner_schedule", "appointment_date", "appointment_time", "status", "consultation_type")
     if old and all(str(old.get(f) or "") == str(doc.get(f) or "") for f in fields):
         return
     if str(doc.status or "").lower() in {"cancelled", "canceled", "completed"}:
@@ -104,6 +105,12 @@ def validate_appointment(doc):
     frappe.db.sql("SELECT name FROM `tabHealthcare Practitioner` WHERE name=%s FOR UPDATE",
                   (doc.practitioner_id,))
     practitioner = _practitioner(doc.practitioner_id)
+    from mobile_app.mobileapp.appointment_utils import is_google_meet_url, is_online_appointment_type
+    consultation = doc.get("consultation_type") or ""
+    if (is_google_meet_url(consultation) or is_online_appointment_type(consultation)
+            or consultation.strip().lower() == "online consultation"):
+        if not frappe.utils.cint(practitioner.get("custom_accept_online_appointments")):
+            frappe.throw("This doctor does not accept online appointments. Please choose another doctor.")
     requested = clock(seconds(doc.appointment_time))
     slots = _availability(practitioner, doc.appointment_date, doc.booking_id, lock=True)
     slot = next((s for s in slots if s["time"] == requested and

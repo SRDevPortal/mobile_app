@@ -19,3 +19,5 @@ mobile_app.patches.v1_0.add_support_ticket_tab
 mobile_app.patches.v1_0.add_support_ticket_workspace_field
 mobile_app.patches.v1_0.setup_app_support_ticket_api_permissions
 mobile_app.patches.v1_0.integrate_mobileintl_support_inbox
+
+mobile_app.patches.v1_0.add_online_appointments

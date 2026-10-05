@@ -26,6 +26,7 @@ def _details(doc):
         for row in doc.get("sr_diseases") or [] if row.get("disease") and unescape(row.disease).strip()))
     return {"id": doc.name, "name": doc.practitioner_name or doc.name,
             "diseases": diseases,
+            "accepts_online_appointments": bool(frappe.utils.cint(doc.get("custom_accept_online_appointments"))),
             "department": doc.get("department") or "", "qualification": doc.get("sr_qualification") or "",
             "status": doc.status, "phone": doc.get("mobile_phone") or doc.get("mobile_no") or "",
             "email": doc.get("email_id") or "", "hospital": doc.get("hospital") or "",
@@ -247,3 +248,18 @@ def save_leave_range(practitioner_id, doctor_modified, start_date, end_date, exp
         frappe.db.rollback(save_point=savepoint)
         raise
     return {"start_date": str(dates[0]), "end_date": str(dates[-1]), "changed_days": len(changes)}
+
+
+@frappe.whitelist(methods=["POST"])
+def set_online_appointments(practitioner_id, doctor_modified, enabled):
+    if str(enabled) not in {"0", "1"}:
+        frappe.throw("Choose enabled or disabled.")
+    doc = _lock_doctor(practitioner_id, doctor_modified)
+    if not doc.meta.has_field("custom_accept_online_appointments"):
+        frappe.throw("Online appointment settings require the mobile_app migration.")
+    # Only update the checked field, preserving imported profile links.
+    frappe.db.set_value(doc.doctype, doc.name, "custom_accept_online_appointments", int(enabled))
+    frappe.clear_document_cache(doc.doctype, doc.name)
+    doc.reload()
+    doc.notify_update()
+    return {"enabled": bool(int(enabled)), "modified": str(doc.modified)}
