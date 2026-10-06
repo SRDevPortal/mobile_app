@@ -50,6 +50,8 @@
             this.opdOnly = (frappe.user_roles || []).includes("OPD Staff") && !(frappe.user_roles || []).some(r => ["System Manager","Appointment Manager","Appointment Receptionist","Agent","Appointment Agent","Physician","Healthcare Practitioner","Mobile App Doctor"].includes(r));
             if (this.opdOnly) this.section = "opd";
             this.render();
+            this.canOPD = frappe.session.user === "Administrator" || (frappe.user_roles || []).some(r => ["System Manager", "Appointment Manager", "OPD Staff", "Appointment Receptionist", "Physician", "Healthcare Practitioner", "Mobile App Doctor"].includes(r));
+            this.$root.find('[data-action="opd"]').toggle(this.canOPD);
             this.bind();
             this.initCalendar();
             if (this.opdOnly) { this.$root.find('[data-action="calendar"], [data-action="doctors"], [data-action="encounters"]').hide(); this.switchSection("opd"); }
@@ -584,6 +586,7 @@
                 return;
             }
             this.section = section;
+            if (section !== "opd" && frappe.get_route()[1] === "room") frappe.set_route("doctor-clinical");
             const doctors = section === "doctors", opd = section === "opd";
             if (doctors || opd) {
                 this.calendarXHR?.abort(); ++this.request;
@@ -600,6 +603,11 @@
             else {this.$cal.fullCalendar("render"); this.fetch(true);}
         }
         show() {
+            const route=frappe.get_route();
+            if(route[1]==='room' && route[2]){
+                this.opd.selectedRoom=route[2];this.opd.section='room';
+                if(this.section!=='opd')this.switchSection('opd');
+            }
             document.body.classList.add("ma-calendar-active");
             clearTimeout(this.showTimer);
             this.showTimer = setTimeout(() => {

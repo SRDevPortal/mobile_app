@@ -36,7 +36,7 @@ def _exists(doctype, filters):
 def _all(doctype, filters=None, fields=None, pluck=None, order_by=None):
     if doctype in store.KINDS: return store.all(doctype,filters,fields,pluck,order_by)
     # Current reads matter under MariaDB REPEATABLE READ after waiting for the clinic lock.
-    return frappe.db.get_values(doctype, filters, pluck or fields or ['name'],
+    return frappe.db.get_values(doctype, {} if filters is None else filters, pluck or fields or ['name'],
         as_dict=not bool(pluck), pluck=bool(pluck), order_by=order_by,
         for_update=bool(frappe.flags.in_opd_mutation)) or []
 
@@ -52,7 +52,7 @@ def _roles():
 
 
 def _manager():
-    return frappe.session.user == "Administrator" or bool(_roles() & MANAGERS)
+    return frappe.session.user == "Administrator" or bool(_roles() & (MANAGERS | STAFF))
 
 
 def _reception():
@@ -68,16 +68,16 @@ def _require_reception():
 
 
 def _assigned_rooms(clinic):
-    return {r['name'] for r in store.records('Room', {'clinic':clinic,'enabled':1})
-        if any(a.user == frappe.session.user for a in r.assignments)}
+    # Every authorized OPD operator can select an enabled room; no staff mapping.
+    return {r['name'] for r in store.records('Room', {'clinic':clinic,'enabled':1})}
 
 
 def _access(clinic, display=False):
     doc = _doc("Clinic", clinic)
     if not doc.enabled or frappe.session.user == "Guest": frappe.throw("OPD clinic access denied.", frappe.PermissionError)
-    if _reception() or (_roles() & STAFF and _assigned_rooms(clinic)): return doc
+    if _reception() or _roles() & STAFF: return doc
     if display and "OPD Display" in _roles() and any(x.user == frappe.session.user for x in doc.display_users): return doc
-    frappe.throw("You are not assigned to this clinic.", frappe.PermissionError)
+    frappe.throw("OPD staff or manager access is required.", frappe.PermissionError)
 
 
 def _json(value, kind):
@@ -147,7 +147,7 @@ def _mutation(fn):
 
 def _room_data(doc):
     return {k: doc.get(k) for k in ('name', 'room_number', 'room_label', 'purpose', 'enabled', 'revision')} | {
-        'assignments': [{'user': a.user, 'practitioner': a.practitioner} for a in doc.assignments]}
+        'assignments': [{'practitioner': p} for p in dict.fromkeys(a.practitioner for a in doc.assignments if a.practitioner)]}
 
 
 def _route_data(doc):
@@ -195,17 +195,11 @@ def get_setup(clinic):
 
 
 def _check_assignments(assignments, purpose):
-    if not assignments: frappe.throw('Assign at least one staff member to every enabled room.')
-    seen = set()
+    if purpose == 'Doctor Consultation' and not assignments:
+        frappe.throw('Select at least one doctor for a consultation room.')
     for a in assignments:
-        user = str(a.get('user') or '')
-        if user in seen: frappe.throw('A user may appear only once in a room.')
-        seen.add(user)
-        if not _value('User', user, 'enabled') or not set(frappe.get_roles(user)) & (STAFF | MANAGERS):
-            if user != 'Administrator': frappe.throw('Choose an enabled OPD staff member.')
-        practitioner = a.get('practitioner')
-        if purpose == 'Doctor Consultation' and not practitioner: frappe.throw('Each consultation room assignment requires a practitioner.')
-        if practitioner and _value('Healthcare Practitioner', practitioner, 'status') != 'Active': frappe.throw('Choose an active practitioner.')
+        if not a.get('practitioner') or _value('Healthcare Practitioner', a['practitioner'], 'status') != 'Active':
+            frappe.throw('Choose an active practitioner.')
 
 
 @frappe.whitelist(methods=['POST'])
@@ -222,7 +216,7 @@ def save_setup(clinic, request_id, expected_version, rooms, routes, display_user
         number, purpose = str(row.get('room_number') or '').strip(), row.get('purpose')
         key = row.get('name') or row.get('client_id')
         if not key or key in ids or not number or len(number) > 30 or number.casefold() in numbers or purpose not in STAGES: frappe.throw('Each room needs a unique number, purpose and identifier.')
-        numbers.add(number.casefold()); enabled = int(bool(cint(row.get('enabled')))); assignments = _json(row.get('assignments', []), list)
+        numbers.add(number.casefold()); enabled = int(bool(cint(row.get('enabled')))); assignments = [{'practitioner': p} for p in dict.fromkeys(a.get('practitioner') for a in _json(row.get('assignments', []), list) if a.get('practitioner'))]
         if enabled: _check_assignments(assignments, purpose)
         for a in assignments:
             if enabled and purpose == 'Doctor Consultation':
@@ -309,6 +303,23 @@ def checkin_context(clinic, doctype, name):
         'patient_name': doc.get('patient_name'), 'visit': find_visit(doc.doctype, doc.name)}
 
 
+def _walkin_appointment(patient, doctor):
+    from mobile_app.api import appointment_calendar as cal
+    matches = []
+    for name in _all('Patient Encounter', filters={'patient': patient, 'docstatus': ['!=', 2]}, pluck='name'):
+        doc = _doc('Patient Encounter', name)
+        date = doc.get('pe_appointment_date') or doc.get('encounter_date')
+        if not date or getdate(date) != getdate() or doc.get('sr_encounter_type') != 'Appointment':
+            continue
+        if doc.get('sr_encounter_place') == 'Online' or cal._doctor(doc)[0] != doctor:
+            continue
+        if cal._status(doc, cal._workflow(doc.doctype, doc.name)) == 'Approved':
+            matches.append(doc)
+    if len(matches) > 1:
+        frappe.throw('Multiple approved appointments match this patient and doctor today. Check in the intended appointment from the calendar.')
+    return matches[0] if matches else None
+
+
 @frappe.whitelist()
 @frappe.validate_and_sanitize_search_inputs
 def patient_query(doctype, txt, searchfield, start, page_len, filters=None):
@@ -326,6 +337,8 @@ def check_in(clinic, request_id, department, doctor, patient=None, patient_detai
     _require_reception()
     from mobile_app.api import appointment_calendar as cal
     source = _canonical(source_doctype, source_name) if source_doctype else None
+    if not source and patient:
+        source = _walkin_appointment(patient, doctor)
     if source:
         if not cal._can_read(source, cal._workflow(source.doctype, source.name), cal._context()): frappe.throw('Appointment access denied.', frappe.PermissionError)
         existing = find_visit(source.doctype, source.name)
@@ -349,9 +362,23 @@ def check_in(clinic, request_id, department, doctor, patient=None, patient_detai
     active = _value('Visit', {'clinic': clinic, 'patient': patient, 'status': 'Active'}, 'name')
     if active:
         existing_visit = _get('Visit', active, clinic)
-        if not source and existing_visit.department == department and existing_visit.consultation_doctor == doctor:
+        same_route = existing_visit.department == department and existing_visit.consultation_doctor == doctor
+        if not source and same_route:
             return _visit_data(existing_visit)
-        frappe.throw('This patient already has an active OPD token. Open their existing visit to change its department or doctor.')
+        if source and same_route and not existing_visit.source_doctype:
+            appointment_date = source.get('pe_appointment_date') or source.get('appointment_date') or source.get('encounter_date')
+            if appointment_date and getdate(appointment_date) == getdate(existing_visit.visit_date):
+                # Adopt the walk-in visit without changing its token, stages or active room.
+                existing_visit.source_doctype = source.doctype
+                existing_visit.source_name = source.name
+                existing_visit.source_key = hashlib.sha256(f'{source.doctype}:{source.name}'.encode()).hexdigest()
+                if source.doctype == 'Patient Encounter': existing_visit.encounter = source.name
+                _save(existing_visit)
+                previous = frappe.flags.opd_checkin; frappe.flags.opd_checkin = True
+                try: cal.update_appointment(source.doctype, source.name, 'check_in', 'Approved', reason=reason)
+                finally: frappe.flags.opd_checkin = previous
+                return _visit_data(existing_visit)
+        frappe.throw(f'This patient already has active OPD token {str(existing_visit.token_number).zfill(3)} for {existing_visit.department} with {existing_visit.consultation_doctor}. Open that visit to continue or change its department or doctor.')
     clinic_doc = _doc('Clinic', clinic); today = getdate()
     if str(clinic_doc.token_date or '') != str(today): clinic_doc.token_date, clinic_doc.last_token = today, 0
     clinic_doc.last_token = cint(clinic_doc.last_token) + 1; clinic_doc.save(ignore_permissions=True)
@@ -377,28 +404,49 @@ def check_in(clinic, request_id, department, doctor, patient=None, patient_detai
 def _session(clinic, name, expected=None, require_controller=True):
     session = _get('Session', name, clinic)
     if session.status == 'Closed': frappe.throw('This room session has ended.')
-    if require_controller and session.controller != frappe.session.user: frappe.throw('Only the active room controller can perform this action.', frappe.PermissionError)
     if expected is not None: _version(session, expected)
     return session
 
 
 def _room_assignment(room, user, practitioner):
     if not room.enabled: frappe.throw('This room is disabled.')
-    if not any(a.user == user and (room.purpose != 'Doctor Consultation' or a.practitioner == practitioner) for a in room.assignments):
-        frappe.throw('Choose an assigned room and consultation doctor.', frappe.PermissionError)
-    if not _value('User', user, 'enabled'): frappe.throw('This staff account is disabled.')
+    if not _value('User', user, 'enabled') or not (user == 'Administrator' or set(frappe.get_roles(user)) & (STAFF | MANAGERS)):
+        frappe.throw('An enabled OPD staff or manager account is required.', frappe.PermissionError)
+    if room.purpose == 'Doctor Consultation' and not any(a.practitioner == practitioner for a in room.assignments):
+        frappe.throw('Choose a consultation doctor configured for this room.')
 
 
 @frappe.whitelist(methods=['POST'])
 @_mutation
 def start_session(clinic, request_id, room, practitioner=None):
-    doc = _get('Room', room, clinic); _room_assignment(doc, frappe.session.user, practitioner)
+    doc = _get('Room', room, clinic)
+    if doc.purpose != 'Doctor Consultation': practitioner = None
+    _room_assignment(doc, frappe.session.user, practitioner)
     if _exists('Session', {'clinic': clinic, 'room': room, 'status': ['!=','Closed']}): frappe.throw('This room already has an active controller.')
-    if _exists('Session', {'clinic': clinic, 'controller': frappe.session.user, 'status': ['!=','Closed']}): frappe.throw('End your current room session before selecting another room.')
     if practitioner and _exists('Session', {'clinic': clinic, 'practitioner': practitioner, 'status': ['!=','Closed']}): frappe.throw('This doctor is already working in another room.')
     session = _doc({'doctype':'Session','clinic':clinic,'room':room,
         'controller':frappe.session.user,'practitioner':practitioner,'status':'Available','started_at':now_datetime()})
     _save(session); return {'session':session.name, 'revision':session.revision}
+
+
+def _claim_next(clinic,room,room_session,required=False):
+    candidates=[]
+    for item in store.records('Visit', {'clinic':clinic,'status':'Active'}):
+        stage=item.stages[item.stage_index]
+        if stage.room==room.name and stage.state=='Waiting' and (room.purpose!='Doctor Consultation' or item.consultation_doctor==room_session.practitioner):
+            candidates.append(item)
+    candidates.sort(key=lambda v:(-cint(v.priority),str(v.stages[v.stage_index].queued_at),str(v.creation),v.name))
+    rows=[v.name for v in candidates[:1]]
+    if not rows:
+        if required: frappe.throw('No eligible patients are waiting for this room.')
+        return None
+    visit = _get('Visit',rows[0],clinic); stage = visit.stages[visit.stage_index]
+    transition={'affected_visit': visit.name, 'stage': stage.stage, 'from_state': stage.state, 'to_state': 'Called'}
+    stage.state, stage.called_at, stage.session = 'Called', now_datetime(), room_session.name
+    room_session.current_visit = visit.name
+    room_session.call_sequence = cint(_value('Clinic',clinic,'event_sequence')) + 1
+    _save(visit)
+    return transition
 
 
 @frappe.whitelist(methods=['POST'])
@@ -411,8 +459,7 @@ def room_action(clinic, request_id, session, expected_version, action, reason=No
     audit = {'room': room.name, 'previous_controller': room_session.controller, 'previous_practitioner': room_session.practitioner}
     if handover:
         _room_assignment(room, controller, practitioner)
-        if _exists('Session', {'clinic':clinic,'controller':controller,'status':['!=','Closed'],'name':['!=',session]}): frappe.throw('The new controller already occupies another room.')
-        if room_session.current_visit and practitioner != room_session.practitioner: frappe.throw('Release the current patient before changing the consultation doctor.')
+        if room.purpose == 'Doctor Consultation' and room_session.current_visit and practitioner != room_session.practitioner: frappe.throw('Release the current patient before changing the consultation doctor.')
         room_session.controller, room_session.practitioner = controller, practitioner
     elif action in ('pause','resume'): room_session.status = 'Paused' if action == 'pause' else 'Available'
     elif action == 'end':
@@ -420,21 +467,8 @@ def room_action(clinic, request_id, session, expected_version, action, reason=No
         room_session.status, room_session.ended_at = 'Closed', now_datetime()
     elif action == 'call_next':
         if room_session.status != 'Available' or room_session.current_visit: frappe.throw('The room must be available and empty before calling the next patient.')
-        candidates=[]
-        for item in store.records('Visit', {'clinic':clinic,'status':'Active'}):
-            stage=item.stages[item.stage_index]
-            if stage.room==room.name and stage.state=='Waiting' and (room.purpose!='Doctor Consultation' or item.consultation_doctor==room_session.practitioner):
-                candidates.append(item)
-        candidates.sort(key=lambda v:(-cint(v.priority),str(v.stages[v.stage_index].queued_at),str(v.creation),v.name))
-        rows=[v.name for v in candidates[:1]]
-        if not rows: frappe.throw('No eligible patients are waiting for this room.')
-        visit = _get('Visit',rows[0],clinic); stage = visit.stages[visit.stage_index]
-        audit.update({'affected_visit': visit.name, 'stage': stage.stage, 'from_state': stage.state, 'to_state': 'Called'})
-        stage.state, stage.called_at, stage.session = 'Called', now_datetime(), room_session.name
-        room_session.current_visit = visit.name
-        room_session.call_sequence = cint(_value('Clinic',clinic,'event_sequence')) + 1
-        _save(visit)
-    elif action in ('recall','start','complete','absent','release'):
+        audit.update(_claim_next(clinic,room,room_session,required=True))
+    elif action in ('recall','start','complete','complete_next','absent','release'):
         if not room_session.current_visit: frappe.throw('This room has no current patient.')
         visit = _get('Visit',room_session.current_visit,clinic); stage = visit.stages[visit.stage_index]
         audit.update({'affected_visit': visit.name, 'stage': stage.stage, 'from_state': stage.state})
@@ -445,7 +479,8 @@ def room_action(clinic, request_id, session, expected_version, action, reason=No
         elif action == 'start':
             if stage.state != 'Called': frappe.throw('The patient has already started this stage.')
             stage.state, stage.started_at = 'In Progress', now_datetime()
-        elif action == 'complete':
+        elif action in ('complete','complete_next'):
+            if action == 'complete_next' and room_session.status != 'Available': frappe.throw('Resume the room before finishing and calling the next patient.')
             if stage.state != 'In Progress': frappe.throw('Start the patient\'s stage before completing it.')
             stage.state, stage.completed_at = 'Completed', now_datetime(); room_session.current_visit = None
             if visit.stage_index == 2: visit.status, visit.completed_at = 'Completed', now_datetime()
@@ -460,6 +495,8 @@ def room_action(clinic, request_id, session, expected_version, action, reason=No
         if visit.status == 'Completed' and visit.source_doctype:
             from mobile_app.api import appointment_calendar as cal
             cal._sync_clinic_status(_canonical(visit.source_doctype,visit.source_name),'Checked In')
+        if action == 'complete_next':
+            audit['next_call'] = _claim_next(clinic,room,room_session)
     else: frappe.throw('Unknown room action.')
     _save(room_session); return {'session':session, 'revision':room_session.revision, 'visit':room_session.current_visit, 'audit':audit}
 
@@ -531,13 +568,29 @@ def snapshot(clinic):
     clinic_doc=_access(clinic); allowed=None if _reception() else _assigned_rooms(clinic)
     room_ids=_all('Room',filters={'clinic':clinic},pluck='name')
     rooms=[_room_data(_doc('Room',n)) for n in room_ids if allowed is None or n in allowed]
+    practitioner_ids = list({a['practitioner'] for room in rooms for a in room['assignments']})
+    fields = ['name', 'practitioner_name', 'image', 'department', 'designation']
+    if frappe.get_meta('Healthcare Practitioner').has_field('sr_qualification'):
+        fields.append('sr_qualification')
+    profiles = {p.name: dict(p) for p in _all('Healthcare Practitioner',
+        filters={'name': ['in', practitioner_ids]}, fields=fields)} if practitioner_ids else {}
+    if practitioner_ids and frappe.get_meta('Healthcare Practitioner').has_field('sr_diseases'):
+        for row in _all('SR Practitioner Disease', filters={'parent': ['in', practitioner_ids],
+                'parenttype': 'Healthcare Practitioner', 'parentfield': 'sr_diseases'},
+                fields=['parent', 'disease'], order_by='idx'):
+            if row.parent in profiles:
+                profiles[row.parent].setdefault('diseases', []).append(row.disease)
+    for room in rooms:
+        room['doctors'] = [profiles.get(a['practitioner'], {'name': a['practitioner'],
+            'practitioner_name': a['practitioner']}) for a in room['assignments']]
     sessions=_all('Session',filters={'clinic':clinic,'status':['!=','Closed']}, fields=['name','room','controller','practitioner','status','current_visit','revision','call_sequence'])
     sessions=[s for s in sessions if allowed is None or s.room in allowed]; visits=[]
     for name in _all('Visit',filters={'clinic':clinic,'status':'Active'},pluck='name',order_by='creation'):
         doc=_doc('Visit',name)
         if allowed is None or doc.stages[doc.stage_index].room in allowed: visits.append(_visit_data(doc))
     return {'sequence':clinic_doc.event_sequence,'rooms':rooms,'sessions':sessions,'visits':visits,
-        'reception':_reception(),'manager':_manager(),'user':frappe.session.user}
+        'reception':_reception(),'manager':_manager(),'user':frappe.session.user,
+        'controllers': [u.name for u in get_setup(clinic)['users']] if _manager() else []}
 
 
 @frappe.whitelist()
@@ -548,7 +601,12 @@ def get_visit(clinic, visit):
 
 
 @frappe.whitelist()
-def display_snapshot(clinic):
+def display_snapshot(clinic=None):
+    if not clinic:
+        clinics = bootstrap()['clinics']
+        if len(clinics) != 1:
+            frappe.throw('Select an authorized clinic before loading the waiting-room display.', frappe.PermissionError)
+        clinic = clinics[0]['name']
     doc=_access(clinic,display=True); calls=[]
     for session in _all('Session',filters={'clinic':clinic,'status':['!=','Closed'],'current_visit':['is','set']},fields=['room','current_visit','call_sequence']):
         visit=_doc('Visit',session.current_visit); stage=visit.stages[visit.stage_index]

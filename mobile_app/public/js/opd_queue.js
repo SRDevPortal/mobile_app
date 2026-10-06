@@ -94,12 +94,19 @@ frappe.provide('mobile_app');
             this.changed=event=>{if(event.clinic===this.clinic && this.visible){if(this.busy)this.refreshPending=true;else if(this.section!=='setup')this.refresh();else this.$root.find('.opd-connection').text('Live - setup changes may require refresh');}};
             this.connected=()=>{this.baseline=null;this.connection(true);if(this.visible && this.section!=='setup')this.refresh();};
             this.disconnected=()=>this.connection(false);
+            this.fitDisplay=()=>{
+                if(!this.display||!this.visible)return;
+                const top=document.fullscreenElement===this.$root[0]?0:Math.max(0,this.$root[0].getBoundingClientRect().top);
+                this.$root.css('height',`${Math.max(240,window.innerHeight-top)}px`);
+            };
             this.focus=()=>{if(!document.hidden && this.visible && this.section!=='setup'){this.baseline=null;this.refresh();}};
+            this.$root[0].addEventListener('error',event=>{if(event.target.matches('.opd-doctor-avatar img'))event.target.remove();},true);
             this.$root.on('click','[data-opd]',event=>{event.preventDefault();this.action($(event.currentTarget).attr('data-opd'),$(event.currentTarget));});
         }
         async show(){
             if(!this.visible){frappe.realtime.on('opd_queue_changed',this.changed);frappe.realtime.socket?.on('connect',this.connected);frappe.realtime.socket?.on('disconnect',this.disconnected);document.addEventListener('visibilitychange',this.focus);}
             this.visible=true;this.baseline=null;
+            if(this.display){window.addEventListener('resize',this.fitDisplay);document.addEventListener('fullscreenchange',this.fitDisplay);requestAnimationFrame(this.fitDisplay);}
             try{
                 this.boot=await read('bootstrap');
                 this.clinic ||= this.boot.clinics[0]?.name;
@@ -110,7 +117,7 @@ frappe.provide('mobile_app');
                 this.shell();await this.refresh();
             }catch(error){this.$root.html('<div class="opd-empty">Unable to load OPD. Check your connection and clinic access, then reload.</div>');}
         }
-        hide(){this.visible=false;++this.serial;frappe.realtime.off('opd_queue_changed',this.changed);frappe.realtime.socket?.off('connect',this.connected);frappe.realtime.socket?.off('disconnect',this.disconnected);document.removeEventListener('visibilitychange',this.focus);}
+        hide(){window.removeEventListener('resize',this.fitDisplay);document.removeEventListener('fullscreenchange',this.fitDisplay);this.visible=false;++this.serial;frappe.realtime.off('opd_queue_changed',this.changed);frappe.realtime.socket?.off('connect',this.connected);frappe.realtime.socket?.off('disconnect',this.disconnected);document.removeEventListener('visibilitychange',this.focus);}
         connection(live){this.$root.find('.opd-connection').toggleClass('live',live).text(live?'Connected':'Disconnected - displayed information may be outdated');}
         shell(){
             const title=this.display?'Please wait for your token to be called':'OPD Patient Flow';
@@ -119,7 +126,8 @@ frappe.provide('mobile_app');
             this.$root.find(`[data-opd="${this.section}"]`).addClass('active');this.connection(frappe.realtime.socket?.connected!==false);
         }
         async refresh(){
-            if(!this.visible||this.busy)return;
+            if(!this.visible||!this.clinic)return;
+            if(this.busy){this.refreshPending=true;return;}
             const serial=++this.serial;
             try{
                 const data=await read(this.display?'display_snapshot':this.section==='setup'?'get_setup':'snapshot',{clinic:this.clinic});
@@ -140,25 +148,47 @@ frappe.provide('mobile_app');
             const rows=d.visits.map(v=>{const s=v.stages[v.stage_index];return `<tr><td><strong>${esc(v.token)}</strong><small>${esc(v.visit_date)}</small></td><td>${esc(v.patient_name)}${v.priority?'<small class="opd-badge priority">Priority</small>':''}</td><td>${esc(v.department)}<small>${esc(v.consultation_doctor_name || v.consultation_doctor)}</small></td><td>${esc(s.stage)}<small>${esc(roomLabel(d.rooms,s.room))}</small></td><td><span class="opd-badge">${esc(s.state)}</span><small>${waitLabel(s.queued_at)} since queue entry</small></td><td>${btn('visit','Open',`data-id="${esc(v.name)}"`)}${btn('print','Print token',`data-id="${esc(v.name)}"`)}</td></tr>`;}).join('');
             this.$root.find('.opd-content').html(`<div class="opd-toolbar"><h2>Active visits ? ${d.visits.length}</h2>${d.reception?btn('walkin','Check in walk-in','',true):''}</div><div class="opd-panel opd-scroll">${rows?`<table class="opd-table"><thead><tr><th>Token</th><th>Patient</th><th>Department / Doctor</th><th>Stage / Room</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="opd-empty">No patients are waiting. Check in an appointment from the calendar or register a walk-in.</div>'}</div>`);
         }
+        roomControls(room,session,current,stage){
+            if(!session)return btn('occupy','Start room session',`data-room="${esc(room.name)}"`,true);
+            const attr=`data-session="${esc(session.name)}"`;
+            return (!current&&session.status==='Available'?btn('call_next','Call next patient',attr,true):'')+
+                (stage?.state==='Called'?btn('start','Patient arrived - Start',attr,true)+btn('recall','Call again',attr)+btn('absent','Patient not present',attr):'')+
+                (stage?.state==='In Progress'?btn(session.status==='Paused'?'complete':'complete_next',session.status==='Paused'?'Complete stage':'Finish & call next',attr,true)+btn('release','Release patient',attr):'')+
+                btn(session.status==='Paused'?'resume':'pause',session.status==='Paused'?'Resume':'Pause',attr)+(!current?btn('end','Close room',attr):'');
+        }
+        roomDoctors(room,session){
+            const doctors=room.doctors||[];
+            if(!doctors.length)return '<p class="opd-doctor-empty">No doctor assigned</p>';
+            return `<div class="opd-room-doctors">${doctors.map(doctor=>{
+                const name=doctor.practitioner_name||doctor.name;
+                const initials=name.replace(/^dr[. ]*/i,'').split(/\s+/).filter(Boolean).slice(0,2).map(x=>x[0]).join('').toUpperCase();
+                const photo=String(doctor.image||'');
+                const safePhoto=/^(https?:\/\/|\/(?!\/))/.test(photo);
+                return `<div class="opd-room-doctor"><div class="opd-doctor-avatar"><span>${esc(initials)}</span>${safePhoto?`<img src="${esc(photo)}" alt="${esc(name)}" loading="lazy">`:''}</div><div><strong>${esc(name)}</strong>${doctor.sr_qualification?`<small>${esc(doctor.sr_qualification)}</small>`:''}${doctor.diseases?.length?`<small>${doctor.diseases.map(esc).join(' ? ')}</small>`:''}</div><span class="opd-badge opd-doctor-status">${esc(session?.status||'Available')}</span></div>`;
+            }).join('')}</div>`;
+        }
         renderRoom(){
             const d=this.data;
+            if(this.selectedRoom){this.renderRoomDetail();return;}
             const cards=d.rooms.filter(r=>r.enabled).map(room=>{
-                const session=d.sessions.find(s=>s.room===room.name), mine=session?.controller===d.user;
-                const current=d.visits.find(v=>v.name===session?.current_visit), stage=current?.stages[current.stage_index];
-                const eligible=d.visits.filter(v=>{const s=v.stages[v.stage_index];return s.room===room.name && s.state==='Waiting' && (room.purpose!=='Doctor Consultation'||!session||v.consultation_doctor===session.practitioner);});
-                let actions='';
-                if(!session && room.assignments.some(a=>a.user===d.user))actions=btn('occupy','Control this room',`data-room="${esc(room.name)}"`,true);
-                if(mine){
-                    const attr=`data-session="${esc(session.name)}"`;
-                    actions=(!current&&session.status==='Available'?btn('call_next','Call next patient',attr,true):'')+
-                        (stage?.state==='Called'?btn('start','Patient arrived ? Start',attr,true)+btn('recall','Call again',attr)+btn('absent','Patient not present',attr):'')+
-                        (stage?.state==='In Progress'?btn('complete','Complete stage',attr,true)+btn('release','Release patient',attr):'')+
-                        btn(session.status==='Paused'?'resume':'pause',session.status==='Paused'?'Resume':'Pause',attr)+(!current?btn('end','End session',attr):'');
-                }
-                if(session&&d.manager)actions+=btn('handover','Transfer control',`data-session="${esc(session.name)}"`);
-                return `<article class="opd-room-card"><h2>Room ${esc(room.room_number)}</h2><p>${esc(room.purpose)} &middot; ${esc(room.room_label)}</p><p>${session?`${esc(session.controller)} &middot; ${esc(session.status)}`:'No active controller'}${session?.practitioner?`<br>${esc(session.practitioner)}`:''}</p><span class="opd-badge">${eligible.length} waiting</span>${current?`<div class="opd-current"><strong>${esc(current.token)}</strong><h3>${esc(current.patient_name)}</h3><p>${esc(current.department)} &middot; ${esc(stage.state)}</p>${btn('visit','Patient record',`data-id="${esc(current.name)}"`)}</div>`:''}<div class="opd-actions">${actions}</div></article>`;
+                const session=d.sessions.find(s=>s.room===room.name);
+                const waiting=d.visits.filter(v=>{const s=v.stages[v.stage_index];return s.room===room.name&&s.state==='Waiting';}).length;
+                return `<article class="opd-room-card"><h2>Room ${esc(room.room_number)}</h2><p>${esc(room.purpose)} &middot; ${esc(room.room_label)}</p><p>${session?`${esc(session.controller)} &middot; ${esc(session.status)}`:'Available'}</p><span class="opd-badge">${waiting} waiting</span><div class="opd-actions">${btn('open-room',session?'View room':'Open room',`data-room="${esc(room.name)}"`,true)}</div></article>`;
             }).join('');
-            this.$root.find('.opd-content').html(`<div class="opd-room-grid">${cards||'<div class="opd-empty">No rooms are assigned. Ask a manager to configure your room in OPD Setup.</div>'}</div>`);
+            this.$root.find('.opd-content').html(`<div class="opd-room-grid">${cards||'<div class="opd-empty">No enabled rooms are available. Ask a manager to configure rooms in OPD Setup.</div>'}</div>`);
+        }
+        renderRoomDetail(){
+            const d=this.data,room=d.rooms.find(r=>r.name===this.selectedRoom);
+            if(!room){this.$root.find('.opd-content').html(`${btn('back-rooms','Back to rooms')}<div class="opd-empty">This room is no longer available.</div>`);return;}
+            const session=d.sessions.find(s=>s.room===room.name),current=d.visits.find(v=>v.name===session?.current_visit),stage=current?.stages[current.stage_index];
+            const visits=d.visits.filter(v=>v.stages[v.stage_index].room===room.name);
+            const waiting=visits.filter(v=>v.stages[v.stage_index].state==='Waiting').sort((a,b)=>(b.priority-a.priority)||String(a.stages[a.stage_index].queued_at).localeCompare(String(b.stages[b.stage_index].queued_at))||a.name.localeCompare(b.name));
+            const held=visits.filter(v=>v.stages[v.stage_index].state==='On Hold');
+            const rows=list=>list.map(v=>`<tr><td><strong>${esc(v.token)}</strong>${v.priority?'<small>Priority</small>':''}</td><td>${esc(v.patient_name)}</td><td>${esc(v.department)}</td><td>${esc(v.consultation_doctor_name||v.consultation_doctor)}</td><td>${esc(waitLabel(v.stages[v.stage_index].queued_at))}</td><td>${btn('visit','Open patient',`data-id="${esc(v.name)}"`)}</td></tr>`).join('');
+            const table=(title,list)=>`<section class="opd-panel"><h3>${esc(title)} (${list.length})</h3>${list.length?`<div style="overflow:auto"><table class="opd-table"><thead><tr><th>Token</th><th>Patient</th><th>Department</th><th>Doctor</th><th>Waiting</th><th></th></tr></thead><tbody>${rows(list)}</tbody></table></div>`:'<p>No patients here.</p>'}</section>`;
+            this.$root.find('.opd-content').html(`<div class="opd-room-layout"><main class="opd-room-main">${btn('back-rooms','Back to rooms')}<div class="opd-head"><div><h1>Room ${esc(room.room_number)}</h1><p>${esc(room.purpose)} &middot; ${esc(room.room_label)}</p></div></div>
+                <section class="opd-panel opd-room-current"><h3>Current patient</h3>${current?`<div class="opd-current"><strong>${esc(current.token)}</strong><h2>${esc(current.patient_name)}</h2><p>${esc(current.department)} &middot; ${esc(stage.state)}</p>${btn('visit','Patient record / clinical forms',`data-id="${esc(current.name)}"`)}</div>`:'<p>No patient is currently being seen.</p>'}<div class="opd-actions">${room.enabled?this.roomControls(room,session,current,stage):'<p>This room is disabled.</p>'}</div></section>
+                ${room.purpose==='Doctor Consultation'&&session?.practitioner?'<p>Call next selects patients for the current doctor. Patients for other doctors remain waiting.</p>':''}${table('Waiting patients',waiting)}${table('On hold',held)}</main><aside class="opd-room-profiles" aria-label="Assigned doctors">${this.roomDoctors(room,session)}</aside></div>`);
         }
 
         renderSetup(){
@@ -167,10 +197,10 @@ frappe.provide('mobile_app');
                 const id=r.name||r.client_id, departments=s.routes.filter(t=>roomFields.some(f=>t[f]===id)).map(t=>t.department).join(', ');
                 return `<tr><td><strong>${esc(r.room_number)}</strong><small>${esc(r.room_label)}</small></td><td>${esc(r.purpose)}</td><td>${esc(staffLabel(r))||'Not assigned'}</td><td>${esc(departments)||'Not yet used'}</td><td>${r.enabled?'Enabled':'Disabled'}</td><td>${btn('edit-room','Edit',`data-index="${i}"`)}</td></tr>`;
             }).join('');
-            const routes=s.routes.map((r,i)=>`<tr><td><strong>${esc(r.department)}</strong></td>${roomFields.map(f=>{const room=s.rooms.find(x=>(x.name||x.client_id)===r[f]);return `<td>${esc(roomLabel(s.rooms,r[f]))}<small>${esc(staffLabel(room))}</small>${room?btn('edit-room','Edit room / staff',`data-index="${s.rooms.indexOf(room)}"`):'<span class="opd-error">Choose a room</span>'}</td>`;}).join('')}<td>${btn('edit-route','Edit route',`data-index="${i}"`)}</td></tr>`).join('');
+            const routes=s.routes.map((r,i)=>`<tr><td><strong>${esc(r.department)}</strong></td>${roomFields.map(f=>{const room=s.rooms.find(x=>(x.name||x.client_id)===r[f]);return `<td>${esc(roomLabel(s.rooms,r[f]))}<small>${esc(staffLabel(room))}</small>${room?btn('edit-room','Edit room / doctors',`data-index="${s.rooms.indexOf(room)}"`):'<span class="opd-error">Choose a room</span>'}</td>`;}).join('')}<td>${btn('edit-route','Edit route',`data-index="${i}"`)}</td></tr>`).join('');
             this.$root.find('.opd-content').html(`<div class="opd-notice">${this.dirty?'Unsaved changes. ':''}Changes apply to new check-ins. Use Apply to waiting patients to review existing visits separately.</div>
                 <div class="opd-toolbar">${btn('save-setup','Save all changes','',true)}${btn('apply-routes','Apply to waiting patients')}${btn('display-users','Display accounts')}</div>
-                <section class="opd-panel"><div class="opd-head"><h2>Rooms, purposes & staff</h2>${btn('add-room','Add room')}</div><div class="opd-scroll"><table class="opd-table"><thead><tr><th>Room</th><th>Purpose</th><th>Assigned staff / doctor</th><th>Used by departments</th><th>Status</th><th></th></tr></thead><tbody>${rooms||'<tr><td colspan="6">Add your first room.</td></tr>'}</tbody></table></div></section>
+                <section class="opd-panel"><div class="opd-head"><h2>Rooms, purposes & doctors</h2>${btn('add-room','Add room')}</div><div class="opd-scroll"><table class="opd-table"><thead><tr><th>Room</th><th>Purpose</th><th>Doctors</th><th>Used by departments</th><th>Status</th><th></th></tr></thead><tbody>${rooms||'<tr><td colspan="6">Add your first room.</td></tr>'}</tbody></table></div></section>
                 <section class="opd-panel"><div class="opd-head"><h2>Department routes</h2>${btn('add-route','Add department route')}</div><div class="opd-scroll"><table class="opd-table"><thead><tr><th>Department</th><th>1. Vitals</th><th>2. Medical History</th><th>3. Consultation</th><th></th></tr></thead><tbody>${routes||'<tr><td colspan="5">Configure rooms above, then connect departments to their three rooms.</td></tr>'}</tbody></table></div></section>`);
         }
         editRoom(index){
@@ -180,13 +210,12 @@ frappe.provide('mobile_app');
                 {fieldname:'room_label',label:'Room name (optional)',fieldtype:'Data',default:r.room_label},
                 {fieldname:'purpose',label:'Purpose',fieldtype:'Select',options:stages,reqd:1,default:r.purpose},
                 {fieldname:'enabled',label:'Enabled',fieldtype:'Check',default:r.enabled},
-                {fieldname:'assignments',label:'Assigned staff and doctors',fieldtype:'Table',in_place_edit:true,data:structuredClone(r.assignments),fields:[
-                    {fieldname:'user',label:'Staff account',fieldtype:'Select',options:['',...this.setup.users.map(u=>u.name)],in_list_view:1,reqd:1,columns:5},
+                {fieldname:'assignments',label:'Doctors',fieldtype:'Table',in_place_edit:true,data:structuredClone(r.assignments),fields:[
                     {fieldname:'practitioner',label:'Doctor',fieldtype:'Select',options:['',...this.setup.practitioners.map(p=>p.name)],in_list_view:1,columns:5}
                 ]},
-                {fieldtype:'HTML',options:'<p>Consultation rooms require a doctor on every staff assignment. Editing this room affects all departments using it.</p>'}
+                {fieldtype:'HTML',options:'<p>Consultation rooms require at least one doctor. Authorized OPD staff can open any available room. Editing this room affects all departments using it.</p>'}
             ],primary_action_label:'Apply to setup',primary_action:values=>{
-                const updated={...r,...values,assignments:(values.assignments||[]).map(a=>({user:a.user,practitioner:a.practitioner||null}))};
+                const updated={...r,...values,assignments:(values.assignments||[]).filter(a=>a.practitioner).map(a=>({practitioner:a.practitioner}))};
                 if(index==null)this.setup.rooms.push(updated);else this.setup.rooms[index]=updated;
                 this.dirty=true;d.hide();this.renderSetup();
             }});d.show();
@@ -207,7 +236,7 @@ frappe.provide('mobile_app');
             for(const r of s.rooms){
                 const number=(r.room_number||'').trim().toLowerCase();
                 if(!number||numbers.has(number)){frappe.msgprint('Each room must have a unique number.');return;}numbers.add(number);
-                if(r.enabled && (!r.assignments.length || r.assignments.some(a=>!a.user || (r.purpose==='Doctor Consultation'&&!a.practitioner)))){frappe.msgprint(`Room ${esc(r.room_number)} needs valid staff/doctor assignments.`);return;}
+                if(r.enabled && r.purpose==='Doctor Consultation' && !r.assignments.some(a=>a.practitioner)){frappe.msgprint(`Room ${esc(r.room_number)} needs a consultation doctor.`);return;}
             }
             for(const route of s.routes){
                 if(!route.department||departments.has(route.department)){frappe.msgprint('Each route must have a distinct department.');return;}departments.add(route.department);
@@ -252,12 +281,7 @@ frappe.provide('mobile_app');
             if(!session)return;
             const send=values=>this.mutate('room_action',{session:session.name,expected_version:session.revision,action,...values});
             if(action==='release')return frappe.prompt([reasonField],send,'Release patient to hold','Release');
-            if(action==='handover'){
-                const room=this.data.rooms.find(r=>r.name===session.room);
-                return frappe.prompt([{fieldname:'controller',label:'New controller',fieldtype:'Select',options:room.assignments.map(a=>a.user),reqd:1},
-                    {fieldname:'practitioner',label:'Consultation doctor',fieldtype:'Select',options:['',...room.assignments.map(a=>a.practitioner).filter(Boolean)],default:session.practitioner},reasonField],send,'Transfer room control','Transfer');
-            }
-            if(['complete','absent','end'].includes(action) && !await confirm({complete:'Complete this stage and move the patient to the next step?',absent:'Mark this patient absent and release the room?',end:'End your room session?'}[action]))return;
+            if(['complete','complete_next','absent','end'].includes(action) && !await confirm({complete_next:'Finish this patient&#39;s stage and call the next waiting patient? If nobody is waiting, the room stays available.',complete:'Complete this stage and move the patient to the next step?',absent:'Mark this patient absent and release the room?',end:'End your room session?'}[action]))return;
             await send({});
         }
         renderTV(){
@@ -276,7 +300,7 @@ frappe.provide('mobile_app');
             if(this.busy)return;
             try{
                 if(['queue','room','setup','calendar','tv','refresh'].includes(action)&&this.dirty&&!await confirm('Discard unsaved OPD setup changes?'))return;
-                if(['queue','room','setup'].includes(action)){this.section=action;this.dirty=false;this.shell();await this.refresh();return;}
+                if(['queue','room','setup'].includes(action)){this.selectedRoom=null;if(this.host && frappe.get_route()[1]==='room')frappe.set_route('doctor-clinical');this.section=action;this.dirty=false;this.shell();await this.refresh();return;}
                 if(action==='calendar'){if(this.host)this.host.switchSection('calendar');else frappe.set_route('doctor-clinical');return;}
                 if(action==='tv'){window.open('/app/opd-display','_blank','noopener');return;}
                 if(action==='refresh'){await this.refresh();return;}
@@ -285,10 +309,19 @@ frappe.provide('mobile_app');
                 if(action==='walkin'){await checkin(this.clinic,null,()=>this.refresh());return;}
                 if(action==='visit'){await this.openVisit(button.attr('data-id'));return;}
                 if(action==='print'){receipt(await read('get_visit',{clinic:this.clinic,visit:button.attr('data-id')}),this.data.rooms);return;}
+                if(action==='back-rooms'){this.selectedRoom=null;if(this.host)frappe.set_route('doctor-clinical');this.renderRoom();return;}
+                if(action==='open-room'){
+                    const roomId=button.attr('data-room');this.selectedRoom=roomId;this.section='room';
+                    if(this.host)frappe.set_route('doctor-clinical','room',roomId);
+                    this.renderRoom();
+                    return;
+                }
                 if(action==='occupy'){
                     const room=this.data.rooms.find(r=>r.name===button.attr('data-room'));
-                    const assignment=room.assignments.find(a=>a.user===this.data.user);
-                    await this.mutate('start_session',{room:room.name,practitioner:assignment?.practitioner});return;
+                    const doctors=[...new Set(room.assignments.map(a=>a.practitioner).filter(Boolean))];
+                    const open=practitioner=>this.mutate('start_session',{room:room.name,practitioner});
+                    if(room.purpose==='Doctor Consultation' && doctors.length>1){frappe.prompt([{fieldname:'doctor',label:'Doctor seeing patients',fieldtype:'Select',options:doctors,reqd:1}],values=>open(values.doctor),'Open consultation room','Open room');return;}
+                    await open(room.purpose==='Doctor Consultation'?doctors[0]:null);return;
                 }
                 if(button.attr('data-session')){await this.roomAction(action,button.attr('data-session'));return;}
                 if(action==='add-room'||action==='edit-room'){this.editRoom(action==='add-room'?null:Number(button.attr('data-index')));return;}

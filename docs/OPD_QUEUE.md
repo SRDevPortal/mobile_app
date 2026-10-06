@@ -15,9 +15,9 @@ Migration initializes Main Clinic inside the settings configuration. It does not
 
 ## Configuration and permissions
 
-System Manager and Appointment Manager manage setup. Appointment Receptionist and managers issue tokens and handle priority, withdrawals, requeueing, department and doctor changes. Assigned OPD Staff, Physician, Healthcare Practitioner and Mobile App Doctor users control rooms. Existing clinical document permissions remain in force; OPD Staff does not itself grant access to clinical forms.
+System Manager and Appointment Manager manage setup. Appointment Receptionist and managers issue tokens and handle priority, withdrawals, requeueing, department and doctor changes. Authorized OPD Staff, reception, doctor and manager accounts can open any available enabled room; staff-account assignments are not required. Existing clinical document permissions remain in force; OPD Staff does not itself grant access to clinical forms.
 
-Create rooms with a unique number, purpose, enabled status and staff assignments. Consultation assignments also require a practitioner. A practitioner can have one enabled consultation room; a staff account can be assigned to several rooms but can control only one session at a time. Select the three appropriate rooms in each department route, then Save all changes. Inline room editing affects every department using that room. Incomplete routes, repeated room numbers and conflicting doctor assignments are rejected transactionally.
+Create rooms with a unique number, purpose, enabled status and doctors. Consultation rooms require at least one practitioner. A practitioner can have one enabled consultation room; a staff account can control only one session at a time. Select the three appropriate rooms in each department route, then Save all changes. Inline room editing affects every department using that room. Incomplete routes, repeated room numbers and conflicting doctor assignments are rejected transactionally.
 
 Create a dedicated System User with only the OPD Display role (and normal baseline roles), then add it under Display accounts and save. Do not give the TV account clinical roles. Its endpoint exposes only clinic/date, active token calls, patient names, rooms and stages. Queue events contain no patient details in realtime broadcasts; clients fetch permission-checked snapshots.
 
@@ -29,7 +29,7 @@ Issue one daily token when an approved in-person appointment checks in or a walk
 
 Shared-room queues order priority first, then entry time at the current stage. Consultation queues additionally match the session's practitioner. Call Next reserves a patient; Start removes the TV call; Complete advances to the next saved room. The last stage completes the visit and linked Clinic Appointment. Merely checking in does not complete the linked appointment, including subsequent encounter-to-appointment synchronization.
 
-Patient Not Present places a called patient on hold. Reception requeues them at the end of the current stage. Release handles a called/in-progress patient with a reason. Pause prevents new calls; End requires an empty room. Managers can transfer control to another assigned user with a reason; changing the consultation doctor requires releasing an active patient first. End a room session before editing its underlying assignments or purpose.
+Patient Not Present places a called patient on hold. Reception requeues them at the end of the current stage. Release handles a called/in-progress patient with a reason. Pause prevents new calls; End requires an empty room. Managers can transfer control to another authorized user with a reason; changing the consultation doctor requires releasing an active patient first. End a room session before editing its doctors or purpose.
 
 Existing Patient and Patient Encounter screens remain the clinical forms. A walk-in without an encounter can open the existing New clinical encounter form when the user has create permission.
 
@@ -83,3 +83,14 @@ Confirm the new pages and roles, configure actual rooms/routes, test a designate
 Local migration note: the existing login_security app's patches.txt has a post_model_sync section without the required pre_model_sync section, blocking full bench migrate. The local schema/pages were installed using targeted `frappe.model.sync.sync_for("mobile_app")` followed by `mobile_app.opd_setup.after_migrate()` and cache clearing. Fix the unrelated login_security migration metadata in its owning deployment before relying on full migration. Do not blindly skip unrelated production migrations.
 
 Production status: not deployed by this implementation session. The configured dev-sr.butest.tech API credentials returned HTTP 401, and no SSH/deployment pipeline access was available. Local/ngrok verification does not establish production readiness or completion.
+
+
+## Dedicated room view
+
+My Room shows room summary cards. Open room navigates to `/app/doctor-clinical/room/ROOM_ID` and starts an available room session. View room opens an existing session; only its current controller can operate it. The room view contains the current patient, clinical-record access, waiting queue, on-hold patients and session controls. Its URL can be refreshed/bookmarked, and Back to rooms returns to the overview. Opening a direct link alone does not claim a room; use Start room session there if needed.
+
+Staff assignment is no longer required. Any enabled authorized OPD operator can open an available room, while consultation doctor matching and exclusive session ownership remain enforced. Transfer control is removed from the user interface. Finish & call next atomically completes the current stage and calls the next eligible patient; if the queue is empty, the room remains open. Close room ends an empty session.
+
+
+### OPD access and multiple rooms (2026-10-06)
+OPD Staff and existing authorized OPD operator roles have full OPD setup, reception, and room-action access. The left-menu OPD entry uses these same roles. This supersedes the earlier manager-only setup and single-room-per-user policy. One user can operate multiple rooms, and any authorized OPD operator can act on an existing room session. Opening a room is navigation; starting a session is explicit. One session per room, optimistic version checks, patient claims, and audit attribution remain enforced. Display-only accounts remain restricted to assigned clinic snapshots; clinical form permissions remain native.

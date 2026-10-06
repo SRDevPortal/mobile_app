@@ -155,7 +155,7 @@ class TestOPDQueue(unittest.TestCase):
         self.roles[user]=[role]
         return user
 
-    def test_display_account_is_restricted_and_controllers_are_enforced(self):
+    def test_display_restricted_and_opd_staff_have_full_controls(self):
         display=self.user('OPD Display');staff=self.user('OPD Staff')
         setup=api.get_setup(self.clinic)
         next(r for r in setup['rooms'] if r['room_number']=='1')['assignments'].append({'user':staff,'practitioner':None})
@@ -168,12 +168,13 @@ class TestOPDQueue(unittest.TestCase):
         for fn in [api.get_setup,api.snapshot]:
             with self.assertRaises(frappe.PermissionError):fn(self.clinic)
         frappe.set_user(staff)
-        self.assertEqual(len(api.snapshot(self.clinic)['rooms']),1)
-        with self.assertRaises(frappe.PermissionError):self.act(session,'start')
-        with self.assertRaises(frappe.PermissionError):api.save_setup(self.clinic,self.req(),setup['config_version'],setup['rooms'],setup['routes'])
-        frappe.set_user('Administrator')
-        self.act(session,'handover',reason='Shift change',controller=staff)
-        frappe.set_user(staff);self.act(session,'start')
+        self.assertEqual(len(api.snapshot(self.clinic)['rooms']),5)
+        self.act(session,'start')
+        self.assertTrue(api.bootstrap()['manager'])
+        self.assertTrue(api.get_setup(self.clinic)['departments'])
+        self.act(session,'complete')
+        current=api.get_setup(self.clinic)
+        api.save_setup(self.clinic,self.req(),current['config_version'],current['rooms'],current['routes'])
 
     def test_priority_precedes_arrival_and_walkin_retry_returns_token(self):
         first,second=self.visit(),self.visit(1)
@@ -228,3 +229,102 @@ class TestOPDQueue(unittest.TestCase):
         settings=frappe.get_doc(store.SETTINGS);settings.set(store.FIELD,'{}')
         store.protect_settings(settings)
         self.assertIn(self.clinic,frappe.parse_json(settings.get(store.FIELD))['clinics'])
+
+    def test_setup_lists_departments_and_genders_without_filters(self):
+        setup=api.get_setup(self.clinic)
+        self.assertTrue(set(self.departments).issubset(set(setup['departments'])))
+        self.assertEqual(set(setup['departments']),set(frappe.get_all('Medical Department',pluck='name')))
+        self.assertEqual(set(setup['genders']),set(frappe.get_all('Gender',pluck='name')))
+
+    def test_staff_share_controls_without_duplicate_room_sessions(self):
+        staff=self.user('OPD Staff');other=self.user('OPD Staff')
+        frappe.set_user(staff)
+        session=self.open_room(1)
+        self.assertEqual(api._value('Session',session,'controller'),staff)
+        frappe.set_user(other)
+        with self.assertRaises(frappe.ValidationError): self.open_room(1)
+        self.act(session,'pause')
+        frappe.set_user(staff);self.act(session,'end')
+        frappe.set_user(other);self.open_room(1)
+
+    def test_finish_and_call_next_is_atomic_and_retry_safe(self):
+        first,second=self.visit(),self.visit(1)
+        session=self.open_room(1);self.act(session,'call_next');self.act(session,'start')
+        args=dict(clinic=self.clinic,request_id=self.req(),session=session,expected_version=api._value('Session',session,'revision'),action='complete_next')
+        result=api.room_action(**args)
+        self.assertEqual(api.room_action(**args),result)
+        self.assertEqual(result['visit'],second['name'])
+        self.assertEqual(self.stage(first)['stages'][0]['state'],'Completed')
+        self.assertEqual(self.stage(first)['stages'][1]['state'],'Waiting')
+        self.assertEqual(self.stage(second)['stages'][0]['state'],'Called')
+        self.assertEqual(result['audit']['next_call']['affected_visit'],second['name'])
+        self.assertEqual(len(api.display_snapshot(self.clinic)['calls']),1)
+
+    def test_finish_with_empty_queue_keeps_room_open(self):
+        visit=self.visit();session=self.open_room(1);self.act(session,'call_next');self.act(session,'start')
+        self.act(session,'pause')
+        with self.assertRaises(frappe.ValidationError):self.act(session,'complete_next')
+        self.assertEqual(self.stage(visit)['stages'][0]['state'],'In Progress')
+        self.act(session,'resume');result=self.act(session,'complete_next')
+        self.assertIsNone(result['visit'])
+        self.assertIsNone(result['audit']['next_call'])
+        self.assertEqual(api._value('Session',session,'status'),'Available')
+        self.assertEqual(self.stage(visit)['stages'][0]['state'],'Completed')
+
+    def test_same_user_controls_multiple_rooms_with_active_patient(self):
+        patient=self.visit()
+        first=self.open_room(1)
+        self.act(first,'call_next');self.act(first,'start')
+        second=self.open_room(4)
+        self.assertNotEqual(first,second)
+        self.assertEqual(self.stage(patient)['stages'][0]['state'],'In Progress')
+        self.assertEqual(api._value('Session',first,'current_visit'),patient['name'])
+
+    def test_walkin_syncs_calendar_and_retries(self):
+        from mobile_app.api import appointment_calendar as cal
+        patient='walkin-patient-'+self.suffix
+        frappe.get_doc({'doctype':'Patient','name':patient,'patient_name':'Walkin test'}).db_insert()
+        encounter='walkin-encounter-'+self.suffix
+        frappe.get_doc({'doctype':'Patient Encounter','name':encounter,'patient':patient,
+            'practitioner':self.doctors[0],'sr_encounter_type':'Appointment',
+            'sr_encounter_place':'OPD','pe_appointment_date':frappe.utils.today()}).db_insert()
+        cal.update_appointment('Patient Encounter',encounter,'approve','Pending')
+        visit=api.check_in(self.clinic,self.req(),self.departments[0],self.doctors[0],patient=patient)
+        self.assertEqual(visit['source_name'],encounter)
+        doc=frappe.get_doc('Patient Encounter',encounter)
+        self.assertEqual(cal._status(doc,cal._workflow(doc.doctype,doc.name)),'Checked In')
+        again=api.check_in(self.clinic,self.req(),self.departments[0],self.doctors[0],patient=patient)
+        self.assertEqual(again['name'],visit['name'])
+
+    def test_existing_walkin_is_linked_without_resetting_progress(self):
+        from mobile_app.api import appointment_calendar as cal
+        visit=self.visit()
+        session=self.open_room(1)
+        self.act(session,'call_next');self.act(session,'start');self.act(session,'complete')
+        stages=self.stage(visit)['stages']
+        encounter='legacy-walkin-'+self.suffix
+        frappe.get_doc({'doctype':'Patient Encounter','name':encounter,'patient':visit['patient'],
+            'practitioner':self.doctors[0],'sr_encounter_type':'Appointment',
+            'sr_encounter_place':'OPD','pe_appointment_date':frappe.utils.today()}).db_insert()
+        cal.update_appointment('Patient Encounter',encounter,'approve','Pending')
+        args=dict(clinic=self.clinic,department=self.departments[0],doctor=self.doctors[0],
+            patient=visit['patient'],source_doctype='Patient Encounter',source_name=encounter)
+        linked=api.check_in(request_id=self.req(),**args)
+        self.assertEqual(linked['name'],visit['name'])
+        self.assertEqual(linked['token'],visit['token'])
+        self.assertEqual(linked['stages'],stages)
+        self.assertEqual(linked['source_name'],encounter)
+        doc=frappe.get_doc('Patient Encounter',encounter)
+        self.assertEqual(cal._status(doc,cal._workflow(doc.doctype,doc.name)),'Checked In')
+        again=api.check_in(request_id=self.req(),**args)
+        self.assertEqual(again['name'],visit['name'])
+        self.assertEqual(len(store.records('Visit',{'clinic':self.clinic})),1)
+
+    def test_display_missing_clinic_resolves_only_authorized_single_clinic(self):
+        with patch.object(api, 'bootstrap', return_value={'clinics':[{'name':self.clinic}]}):
+            self.assertEqual(api.display_snapshot(),api.display_snapshot(self.clinic))
+        for clinics in [[],[{'name':self.clinic},{'name':'another'}]]:
+            with patch.object(api, 'bootstrap', return_value={'clinics':clinics}):
+                with self.assertRaises(frappe.PermissionError):api.display_snapshot()
+        frappe.set_user('Guest')
+        with self.assertRaises(frappe.PermissionError):api.display_snapshot()

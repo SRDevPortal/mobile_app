@@ -15,6 +15,21 @@
     },
     {
       "role": "OPD Display"
+    },
+    {
+      "role": "OPD Staff"
+    },
+    {
+      "role": "Appointment Receptionist"
+    },
+    {
+      "role": "Physician"
+    },
+    {
+      "role": "Healthcare Practitioner"
+    },
+    {
+      "role": "Mobile App Doctor"
     }
   ]
 }
