@@ -91,7 +91,7 @@ def _agent(doc, workflow):
     return assigned
 
 
-def _can_read(doc, workflow, context):
+def _can_read_original(doc, workflow, context):
     user, roles, manager = context
     if manager:
         return True
@@ -101,6 +101,17 @@ def _can_read(doc, workflow, context):
     if roles.intersection(AGENT_ROLES) and (not agent or agent == user):
         return True
     return bool(roles.intersection(DOCTOR_ROLES) and _doctor(doc)[2] == user)
+
+
+def _can_read(doc, workflow, context):
+    if not _can_read_original(doc, workflow, context): return False
+    from mobile_app.api.opd_queue import appointment_branch, _branch_admin
+    from mobile_app import opd_store
+    branch=appointment_branch(doc.doctype,doc.name)
+    if branch and not _branch_admin():
+        record=opd_store.get('Clinic',branch)
+        if record.get('members') is not None and frappe.session.user not in record.members: return False
+    return True
 
 
 def _status(doc, workflow):
@@ -153,6 +164,10 @@ def _serialize(doc, workflow, context, details=False):
                status=_status(doc, workflow), online=online, assigned_agent=_agent(doc, workflow),
                actions=_actions(doc, workflow, context), encounter=encounter,
                checked_in_at=workflow.get("checked_in_at"))
+    from mobile_app.api.opd_queue import appointment_branch
+    from mobile_app import opd_store
+    out['clinic']=None if online else appointment_branch(doc.doctype,doc.name)
+    out['clinic_name']=opd_store.value('Clinic',out['clinic'],'clinic_name') if out['clinic'] else None
     if details:
         from mobile_app.api.opd_queue import find_visit
         visit = find_visit(doc.doctype, doc.name)

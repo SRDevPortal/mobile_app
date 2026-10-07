@@ -53,6 +53,10 @@
             this.canOPD = frappe.session.user === "Administrator" || (frappe.user_roles || []).some(r => ["System Manager", "Appointment Manager", "OPD Staff", "Appointment Receptionist", "Physician", "Healthcare Practitioner", "Mobile App Doctor"].includes(r));
             this.$root.find('[data-action="opd"]').toggle(this.canOPD);
             this.bind();
+            frappe.xcall('mobile_app.api.opd_queue.bootstrap').then(boot=>{
+                this.$root.find('.ac-branch-filter').html('<option value="">All branches</option>'+boot.clinics.map(c=>`<option value="${esc(c.name)}">${esc(c.clinic_name)}</option>`).join(''));
+            }).catch(()=>this.$root.find('.ac-branch-filter').hide());
+            this.$root.on('change','.ac-branch-filter',e=>{this.branchFilter=e.target.value;this.refilter();});
             this.initCalendar();
             if (this.opdOnly) { this.$root.find('[data-action="calendar"], [data-action="doctors"], [data-action="encounters"]').hide(); this.switchSection("opd"); }
             mobile_app.realtime.watch("calendar", ["Mobile App Appointment", "Patient Encounter",
@@ -109,7 +113,7 @@
                         <div class="ac-legend"><h2>APPOINTMENT STATUS</h2>${["Pending", "Approved", "Checked In", "Cancelled"].map(s => `<div>${statusMark(s)}${s}</div>`).join("")}</div>
                         <p class="ac-sidebar-note">Select a doctor to filter the calendar. Select a booking to review it.</p>
                     </aside><section class="ac-calendar-area" aria-label="Appointment calendar">
-                        <div class="ac-calendar-tools"><div class="ac-zoom" role="group" aria-label="Calendar time scale">
+                        <div class="ac-calendar-tools"><select class="ac-branch-filter" aria-label="Appointment branch"><option value="">All branches</option></select><div class="ac-zoom" role="group" aria-label="Calendar time scale">
                             <span>Time scale</span>
                             ${this.button("zoom-out", "&minus;", "ac-icon-btn", 'aria-label="Zoom out calendar" title="Zoom out: see more hours"')}
                             ${this.button("zoom-reset", `${this.zoom}%`, "ac-zoom-value", 'aria-label="Reset calendar zoom to 100 percent" title="Reset to 100%"')}
@@ -432,6 +436,7 @@
         matches(r, includeQueue = true, includeDoctor = true) {
             const stages = {Pending:"Pending", Approved:"Approved", Cancelled:"Cancelled", "Checked In":"Checked In"};
             return (!this.range || (r.date >= this.range.start.format("YYYY-MM-DD") && r.date < this.range.end.format("YYYY-MM-DD"))) &&
+                (!this.branchFilter || r.clinic === this.branchFilter) &&
                 (!includeDoctor || !this.doctor || r.doctor_id === this.doctor) &&
                 (!includeQueue || this.queue === "All" || r.status === stages[this.queue]) &&
                 (this.channel === "All" || (this.channel === "Online") === r.online) &&
@@ -521,12 +526,19 @@
             const meet = /^https:\/\/meet\.google\.com\//i.test(r.meet_link || "") ? `<a class="ac-btn" target="_blank" rel="noopener noreferrer" href="${esc(r.meet_link)}">Join video consultation</a>` : "";
             this.$root.find(".ac-detail-view").html(`<div class="ac-detail-top">${this.button("close", `${icon("es-line-left-chevron")} Appointments`)}<span class="ac-badge ${statusClass(r.status)}">${statusMark(r.status)}${esc(r.status)}</span></div>
                 <div class="ac-patient-heading"><span class="ac-eyebrow">APPOINTMENT DETAILS</span><h2>${esc(r.patient_name)}</h2><p>${esc(moment(r.date).format("dddd, D MMMM"))} &middot; ${esc(moment(r.time,"HH:mm:ss").format("h:mm A"))}</p></div>
-                <div class="ac-detail-scroll"><dl>${field("OPD token",r.opd_visit ? String(r.opd_visit.token_number).padStart(3,"0") : "")}${field("Doctor",r.doctor_name)}${field("Appointment mode",r.online ? "Online" : "In clinic")}${field("Phone",r.phone)}${field("Email",r.email)}${field("Patient",r.patient)}${field("Booking",r.name)}${field("Assigned agent",r.assigned_agent || "Unassigned")}${field("Encounter",r.encounter)}${field("Notes",r.notes)}${field("Decision reason",r.reason)}${field("Decision by",r.decision_by)}${field("Decision time",stamp(r.decision_at))}${field("Checked in",stamp(r.checked_in_at))}</dl>
+                <div class="ac-detail-scroll"><dl>${field("OPD token",r.opd_visit ? String(r.opd_visit.token_number).padStart(3,"0") : "")}${field("Branch",r.clinic_name)}${field("Doctor",r.doctor_name)}${field("Appointment mode",r.online ? "Online" : "In clinic")}${field("Phone",r.phone)}${field("Email",r.email)}${field("Patient",r.patient)}${field("Booking",r.name)}${field("Assigned agent",r.assigned_agent || "Unassigned")}${field("Encounter",r.encounter)}${field("Notes",r.notes)}${field("Decision reason",r.reason)}${field("Decision by",r.decision_by)}${field("Decision time",stamp(r.decision_at))}${field("Checked in",stamp(r.checked_in_at))}</dl>
                 ${history.length ? `<details class="ac-history"><summary>Activity history</summary>${history.map(h => `<div><small>${esc(stamp(h.creation))} | ${esc(h.comment_by)}</small><p>${esc($('<div>').html(h.content).text())}</p></div>`).join("")}</details>` : ""}</div>
-                <div class="ac-detail-actions">${r.actions.map(a => this.button(a,labels[a],a === "cancel" ? "ac-danger" : "ac-primary")).join("")}${this.canAssign && !["Checked In","Cancelled"].includes(r.status) ? this.button("assign","Assign agent") : ""}${meet}${r.can_open_source ? this.button("source",r.encounter ? "Open Patient Encounter" : "Open booking record") : ""}${!r.actions.length && !["Checked In","Cancelled"].includes(r.status) ? '<p class="ac-muted">Actions are available to the responsible agent or assigned doctor.</p>' : ""}</div>`);
+                <div class="ac-detail-actions">${!r.online&&!r.opd_visit&&this.canOPD?this.button("branch","Set branch"):""}${r.actions.map(a => this.button(a,labels[a],a === "cancel" ? "ac-danger" : "ac-primary")).join("")}${this.canAssign && !["Checked In","Cancelled"].includes(r.status) ? this.button("assign","Assign agent") : ""}${meet}${r.can_open_source ? this.button("source",r.encounter ? "Open Patient Encounter" : "Open booking record") : ""}${!r.actions.length && !["Checked In","Cancelled"].includes(r.status) ? '<p class="ac-muted">Actions are available to the responsible agent or assigned doctor.</p>' : ""}</div>`);
         }
         close() {this.selected = null; ++this.detailRequest; this.$root.find(".ac-detail-view").prop("hidden",true);this.$root.find(".ac-queue-view").prop("hidden",false);this.renderQueue();}
         action(action, button) {
+            if(action==='branch'&&this.selected){
+                const appointment=this.selected;
+                frappe.xcall('mobile_app.api.opd_queue.bootstrap').then(boot=>frappe.prompt([
+                    {fieldname:'clinic',label:'Branch',fieldtype:'Select',reqd:1,default:appointment.clinic,options:boot.clinics.map(c=>({value:c.name,label:c.clinic_name}))},
+                    {fieldname:'reason',label:'Reason',fieldtype:'Small Text',reqd:1}
+                ],async values=>{await frappe.xcall('mobile_app.api.opd_queue.assign_appointment_branch',{...values,doctype:appointment.source_doctype,name:appointment.name,request_id:crypto.randomUUID()});this.close();this.revisions?.clear();this.fetch(true);},'Appointment branch','Save'));return;
+            }
             if (action === "opd") return this.directory.leaveDraft(() => this.switchSection("opd"));
             if (action === "encounters" && this.section === "opd" && this.opd.dirty) return frappe.confirm("Discard unsaved OPD setup changes?", () => {this.opd.dirty = false; this.action(action, button);});
             if (action === "check_in" && this.selected && !this.selected.online) return mobile_app.opd_checkin(this.selected, () => { this.close(); this.fetch(true); });

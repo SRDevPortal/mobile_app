@@ -26,6 +26,7 @@ class TestOPDQueue(unittest.TestCase):
         frappe.flags.in_opd_mutation=True
         store.lock()
         store.save(store.Record("Clinic", {"name":self.clinic,"clinic_name":self.clinic,"enabled":1}))
+        config=store.configuration();config['default_clinic']=self.clinic;store.write_configuration(config)
         frappe.flags.in_opd_mutation=False
         rooms = []
         for number,purpose,doctor in [(1,api.STAGES[0],None),(3,api.STAGES[1],None),(4,api.STAGES[1],None),(5,api.STAGES[2],self.doctors[1]),(6,api.STAGES[2],self.doctors[0])]:
@@ -328,3 +329,231 @@ class TestOPDQueue(unittest.TestCase):
                 with self.assertRaises(frappe.PermissionError):api.display_snapshot()
         frappe.set_user('Guest')
         with self.assertRaises(frappe.PermissionError):api.display_snapshot()
+
+    def test_end_day_preserves_history_and_retry(self):
+        visit=self.visit();session=self.open_room(1)
+        day=frappe.utils.today()
+        before=api.daily_visits(self.clinic,day)
+        self.assertEqual(before['counts']['Waiting'],1)
+        preview=api.preview_end_day(self.clinic,day)
+        args=dict(clinic=self.clinic,request_id=self.req(),date=day,
+            expected_sequence=preview['sequence'],reason='Clinic closed',close_visits=1)
+        result=api.end_day(**args)
+        self.assertEqual(result,api.end_day(**args))
+        self.assertEqual(result['closed_visits'],[visit['name']])
+        self.assertFalse(store.records('Session',{'clinic':self.clinic}))
+        after=api.daily_visits(self.clinic,day)
+        self.assertEqual(after['counts']['Withdrawn'],1)
+        self.assertEqual(after['visits'][0]['token'],visit['token'])
+
+    def test_end_day_releases_claimed_visits_and_rejects_stale_preview(self):
+        visit=self.visit();session=self.open_room(1)
+        preview=api.preview_end_day(self.clinic,frappe.utils.today())
+        self.act(session,'call_next')
+        with self.assertRaises(frappe.TimestampMismatchError):
+            api.end_day(self.clinic,self.req(),preview['date'],preview['sequence'],'Closing',1)
+        preview=api.preview_end_day(self.clinic,preview['date'])
+        result=api.end_day(self.clinic,self.req(),preview['date'],preview['sequence'],'Closing',1)
+        self.assertEqual(self.stage(visit)['status'],'Withdrawn')
+        self.assertEqual(result['released_patients'][0]['previous_state'],'Called')
+        self.assertFalse(store.records('Session',{'clinic':self.clinic}))
+        self.assertEqual(api.display_snapshot(self.clinic)['calls'],[])
+
+    def test_daily_history_date_and_guest_access(self):
+        visit=self.visit()
+        self.assertEqual(api.daily_visits(self.clinic,frappe.utils.add_days(frappe.utils.today(),-1))['counts']['Total'],0)
+        frappe.set_user('Guest')
+        with self.assertRaises(frappe.PermissionError):api.daily_visits(self.clinic)
+        with self.assertRaises(frappe.PermissionError):api.preview_end_day(self.clinic,frappe.utils.today())
+
+    def test_end_day_releases_in_progress_without_completing_treatment(self):
+        visit=self.visit();session=self.open_room(1)
+        self.act(session,'call_next');self.act(session,'start')
+        preview=api.preview_end_day(self.clinic,frappe.utils.today())
+        result=api.end_day(self.clinic,self.req(),preview['date'],preview['sequence'],'Clinic closed',1)
+        self.assertEqual(result['released_patients'][0]['previous_state'],'In Progress')
+        current=self.stage(visit)
+        self.assertEqual(current['status'],'Withdrawn')
+        self.assertFalse(current['stages'][0]['completed_at'])
+        self.assertEqual(current['stages'][1]['state'],'Not Ready')
+
+    def test_room_purpose_create_rename_delete_and_in_use_guard(self):
+        setup=api.get_setup(self.clinic)
+        purposes=setup['purposes']+[{'id':'triage','name':'Triage','stage':'Vitals'}]
+        api.save_setup(self.clinic,self.req(),setup['config_version'],setup['rooms'],setup['routes'],purposes=purposes)
+        setup=api.get_setup(self.clinic)
+        purposes[-1]['name']='Initial assessment'
+        api.save_setup(self.clinic,self.req(),setup['config_version'],setup['rooms'],setup['routes'],purposes=purposes)
+        setup=api.get_setup(self.clinic)
+        self.assertEqual(setup['purposes'][-1]['name'],'Initial assessment')
+        api.save_setup(self.clinic,self.req(),setup['config_version'],setup['rooms'],setup['routes'],purposes=purposes[:-1])
+        setup=api.get_setup(self.clinic)
+        with self.assertRaises(frappe.ValidationError):
+            api.save_setup(self.clinic,self.req(),setup['config_version'],setup['rooms'],setup['routes'],purposes=setup['purposes'][1:])
+
+    def test_custom_room_purpose_keeps_routing_stage(self):
+        setup=api.get_setup(self.clinic)
+        purposes=setup['purposes']+[{'id':'triage','name':'Triage','stage':'Vitals'}]
+        next(r for r in setup['rooms'] if r['room_number']=='1')['purpose_id']='triage'
+        for route in setup['routes']:
+            route['vitals_room']=None
+            route['steps'][0]['purpose_id']='triage'
+        api.save_setup(self.clinic,self.req(),setup['config_version'],setup['rooms'],setup['routes'],purposes=purposes)
+        room=next(r for r in api.get_setup(self.clinic)['rooms'] if r['room_number']=='1')
+        self.assertEqual(room['purpose_name'],'Triage')
+        self.assertEqual(room['purpose'],'Vitals')
+        self.assertEqual(next(s['room'] for s in self.visit()['stages'] if s['purpose_id']=='triage'),room['name'])
+
+    def test_added_purpose_is_a_real_fourth_step_and_old_visit_stays_saved(self):
+        old=self.visit()
+        setup=api.get_setup(self.clinic)
+        purposes=setup['purposes']+[{'id':'lab','name':'Lab Test','stage':'Vitals'}]
+        setup['rooms'].append({'client_id':'lab-room','room_number':'7','purpose_id':'lab','purpose':'Vitals','enabled':1,'assignments':[]})
+        for route in setup['routes']:
+            route['steps'].append({'purpose_id':'lab','stage':'Lab Test','room':'lab-room'})
+        api.save_setup(self.clinic,self.req(),setup['config_version'],setup['rooms'],setup['routes'],purposes=purposes)
+        visit=self.visit()
+        self.assertEqual([s['stage'] for s in visit['stages']],['Vitals','Medical History','Lab Test','Doctor Consultation'])
+        self.assertEqual(len(self.stage(old)['stages']),3)
+        # Withdraw the older unclaimed visit so the new visit is next in each queue.
+        api.visit_action(self.clinic,self.req(),old['name'],self.stage(old)['revision'],'withdraw','Test isolates new route')
+        rooms={r['name']:r for r in api.get_setup(self.clinic)['rooms']}
+        for i,stage in enumerate(visit['stages']):
+            room=rooms[stage['room']]
+            session=api.start_session(self.clinic,self.req(),room['name'],self.doctors[0] if room['purpose']=='Doctor Consultation' else None)['session']
+            self.act(session,'call_next');self.act(session,'start');self.act(session,'complete')
+            self.assertEqual(self.stage(visit)['status'],'Completed' if i==3 else 'Active')
+            self.act(session,'end')
+
+    def test_delete_unused_room_and_department_route(self):
+        setup=api.get_setup(self.clinic)
+        # Remove a route and its exclusive rooms together.
+        remaining=[r for r in setup['routes'] if r['department']==self.departments[0]]
+        rooms=[r for r in setup['rooms'] if r['room_number'] not in ('3','5')]
+        api.save_setup(self.clinic,self.req(),setup['config_version'],rooms,remaining)
+        after=api.get_setup(self.clinic)
+        self.assertEqual(len(after['routes']),1)
+        self.assertEqual(len(after['rooms']),3)
+        self.assertTrue(frappe.db.exists('Medical Department',self.departments[1]))
+
+    def test_cannot_delete_room_in_route_or_department_with_active_visit(self):
+        setup=api.get_setup(self.clinic)
+        rooms=[r for r in setup['rooms'] if r['room_number']!='1']
+        with self.assertRaises(frappe.ValidationError):
+            api.save_setup(self.clinic,self.req(),setup['config_version'],rooms,setup['routes'])
+        self.visit()
+        with self.assertRaises(frappe.ValidationError):
+            api.save_setup(self.clinic,self.req(),setup['config_version'],setup['rooms'],[])
+        self.assertEqual(len(api.get_setup(self.clinic)['routes']),2)
+
+    def test_branch_copy_and_access_isolation(self):
+        staff=self.user('OPD Staff')
+        result=api.save_branch(self.clinic,self.req(),'Noida '+self.suffix,'N'+self.suffix[:5],members=[staff],copy_setup=1)
+        branch=result['branch']
+        copied=api.get_setup(branch)
+        self.assertEqual(len(copied['rooms']),5)
+        self.assertTrue(all(r['name'] not in self.rooms.values() for r in copied['rooms']))
+        self.assertEqual(api.daily_visits(branch)['counts']['Total'],0)
+        other=self.user('OPD Staff')
+        frappe.set_user(other)
+        with self.assertRaises(frappe.PermissionError):api.snapshot(branch)
+        frappe.set_user(staff)
+        self.assertEqual(len(api.snapshot(branch)['rooms']),5)
+        with self.assertRaises(frappe.PermissionError):api.save_branch(branch,self.req(),'Forbidden','NO',members=[])
+        frappe.set_user('Administrator')
+        self.open_room(6,0)
+        consult=next(r for r in copied['rooms'] if r['room_number']=='6')
+        with self.assertRaises(frappe.ValidationError):api.start_session(branch,self.req(),consult['name'],self.doctors[0])
+
+    def test_branch_prefix_and_end_day_isolation(self):
+        result=api.save_branch(self.clinic,self.req(),'Noida '+self.suffix,'N'+self.suffix[:5],members=[],copy_setup=1)
+        branch=result['branch'];first=self.visit()
+        patient='branch-patient-'+self.suffix
+        frappe.get_doc({'doctype':'Patient','name':patient,'patient_name':patient}).db_insert()
+        visit=api.check_in(branch,self.req(),self.departments[0],self.doctors[0],patient=patient)
+        self.assertTrue(visit['token'].endswith('-001'))
+        preview=api.preview_end_day(branch,frappe.utils.today())
+        api.end_day(branch,self.req(),preview['date'],preview['sequence'],'Closed branch',1)
+        self.assertEqual(self.stage(first)['status'],'Active')
+
+    def test_appointment_branch_binding_and_wrong_branch_checkin(self):
+        from mobile_app.api import appointment_calendar as cal
+        branch=api.save_branch(self.clinic,self.req(),'Noida '+self.suffix,'N'+self.suffix[:5],members=[],copy_setup=1)['branch']
+        patient='branch-booking-patient-'+self.suffix
+        frappe.get_doc({'doctype':'Patient','name':patient,'patient_name':patient}).db_insert()
+        encounter='branch-booking-'+self.suffix
+        frappe.get_doc({'doctype':'Patient Encounter','name':encounter,'patient':patient,'practitioner':self.doctors[0],
+            'sr_encounter_type':'Appointment','sr_encounter_place':'OPD','pe_appointment_date':frappe.utils.today()}).db_insert()
+        cal.update_appointment('Patient Encounter',encounter,'approve','Pending')
+        api.assign_appointment_branch(branch,self.req(),'Patient Encounter',encounter,'Patient chose Noida')
+        self.assertEqual(api.appointment_branch('Patient Encounter',encounter),branch)
+        with self.assertRaises(frappe.ValidationError):
+            api.check_in(self.clinic,self.req(),self.departments[0],self.doctors[0],source_doctype='Patient Encounter',source_name=encounter)
+        result=api.check_in(branch,self.req(),self.departments[0],self.doctors[0],source_doctype='Patient Encounter',source_name=encounter)
+        self.assertEqual(result['clinic'],branch)
+
+    def test_delete_empty_branch_and_protect_configured_branch(self):
+        branch=api.save_branch(self.clinic,self.req(),'Empty '+self.suffix,'E'+self.suffix[:5],members=[])['branch']
+        revision=api.branch_details(branch)['revision']
+        args=dict(clinic=self.clinic,request_id=self.req(),branch=branch,expected_revision=revision,reason='Test branch no longer needed')
+        self.assertEqual(api.delete_branch(**args),api.delete_branch(**args))
+        self.assertFalse(store.records('Clinic',{'name':branch}))
+        other=api.save_branch(self.clinic,self.req(),'Configured '+self.suffix,'C'+self.suffix[:5],members=[],copy_setup=1)['branch']
+        with self.assertRaises(frappe.ValidationError):
+            api.delete_branch(self.clinic,self.req(),other,api.branch_details(other)['revision'],'Remove')
+        staff=self.user('OPD Staff');frappe.set_user(staff)
+        with self.assertRaises(frappe.PermissionError):api.list_branches()
+
+    def test_readonly_patient_view_and_record_tabs(self):
+        visit=self.visit()
+        result=api.patient_overview(self.clinic,visit['name'])
+        self.assertEqual(result['patient']['name'],visit['patient'])
+        self.assertTrue(all(f['type'] not in ('Password','HTML','Button') for f in result['patient']['fields']))
+        for tab in ('invoice','prescription','history','dispatch'):
+            result=api.patient_records(self.clinic,visit['name'],tab)
+            self.assertIn('records',result)
+        self.assertEqual(self.stage(visit)['revision'],visit['revision'])
+        with self.assertRaises(frappe.ValidationError):api.patient_records(self.clinic,visit['name'],'anything')
+        frappe.set_user('Guest')
+        with self.assertRaises(frappe.PermissionError):api.patient_overview(self.clinic,visit['name'])
+
+    def test_patient_view_respects_patient_read_permission(self):
+        visit=self.visit()
+        staff=self.user('OPD Staff');frappe.set_user(staff)
+        with patch.object(frappe,'has_permission',return_value=False):
+            with self.assertRaises(frappe.PermissionError):api.patient_overview(self.clinic,visit['name'])
+
+    def test_room_vitals_append_encounter_notes_and_safe_retry(self):
+        visit=self.visit();session=self.open_room(1)
+        self.act(session,'call_next');self.act(session,'start')
+        options=api.add_vital_option(self.clinic,self.req(),session,'Temperature','C')['options']
+        custom=options[-1]['id']
+        context=api.room_vitals(self.clinic,session)
+        args=dict(clinic=self.clinic,request_id=self.req(),session=session,expected_session_revision=context['session_revision'],visit=visit['name'],expected_revision=context['revision'],values={'pulse':72,custom:36.5})
+        result=api.update_room_vitals(**args)
+        notes=frappe.db.get_value('Patient Encounter',result['encounter'],'sr_notes')
+        self.assertIn('Temperature: 36.5 C',notes)
+        self.assertEqual(result,api.update_room_vitals(**args))
+        self.assertEqual(notes,frappe.db.get_value('Patient Encounter',result['encounter'],'sr_notes'))
+        summary=api.patient_overview(self.clinic,visit['name'])
+        self.assertTrue(any(f['label']=='Heart Rate / Pulse' and f['value']==72 for f in summary['vitals']['fields']))
+        context=api.room_vitals(self.clinic,session)
+        api.update_room_vitals(self.clinic,self.req(),session,context['session_revision'],visit['name'],context['revision'],{'pulse':74})
+        self.assertIn(notes,frappe.db.get_value('Patient Encounter',result['encounter'],'sr_notes'))
+
+    def test_room_vitals_require_started_patient(self):
+        visit=self.visit();session=self.open_room(1);self.act(session,'call_next')
+        context=api.room_vitals(self.clinic,session)
+        with self.assertRaises(frappe.ValidationError):
+            api.update_room_vitals(self.clinic,self.req(),session,context['session_revision'],visit['name'],context['revision'],{'pulse':72})
+
+    def test_delete_vital_options_stays_empty_and_preserves_notes(self):
+        visit=self.visit();session=self.open_room(1)
+        self.act(session,'call_next');self.act(session,'start')
+        context=api.room_vitals(self.clinic,session)
+        result=api.update_room_vitals(self.clinic,self.req(),session,context['session_revision'],visit['name'],context['revision'],{'pulse':72})
+        notes=frappe.db.get_value('Patient Encounter',result['encounter'],'sr_notes')
+        for option in context['options']:
+            api.delete_vital_option(self.clinic,self.req(),session,option['id'])
+        self.assertEqual(api.room_vitals(self.clinic,session)['options'],[])
+        self.assertEqual(frappe.db.get_value('Patient Encounter',result['encounter'],'sr_notes'),notes)

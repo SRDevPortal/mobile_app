@@ -32,6 +32,12 @@ def after_migrate():
                 store.save(store.Record(kind,old))
         if not store.all('Clinic'):
             store.save(store.Record('Clinic',{'name':'main-clinic','clinic_name':'Main Clinic','enabled':1}))
+        config=store.configuration()
+        if not config.get('default_clinic'):
+            primary=next(iter(config['clinics'].values()))
+            if primary.get('clinic_name')=='Main Clinic':primary['clinic_name']='Gurgaon'
+            primary.setdefault('code','GGN');primary.setdefault('timezone',frappe.utils.get_system_timezone())
+            config['default_clinic']=primary['name'];store.write_configuration(config)
         # Remove only the superseded OPD metadata. Frappe retains old SQL tables as migration backups.
         for doctype in ['OPD Queue Event','OPD Visit','OPD Room Session','OPD Department Route','OPD Room','OPD Clinic',
                         'OPD Visit Stage','OPD Room Assignment','OPD Display User']:
