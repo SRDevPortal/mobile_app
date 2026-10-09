@@ -11,7 +11,7 @@
         return `<svg class="ac-clinic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${shapes[name]}</svg>`;
     };
     // Dark doctor colours keep white appointment labels legible in every view.
-    const colors = ["#176b63", "#456579", "#316596", "#667333", "#885367", "#366b4b"];
+    const colors = ["#2457a7", "#0f7067", "#7047a3", "#a34d24", "#9b3c65", "#456329"];
     const labels = {approve: "Approve appointment", cancel: "Cancel appointment", check_in: "Check in", claim: "Take responsibility"};
     const statusClass = value => String(value).toLowerCase().replaceAll(" ", "-");
     const statusMark = status => {

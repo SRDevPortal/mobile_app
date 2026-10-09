@@ -1,4 +1,4 @@
-"""Healthcare Practitioner disease selections owned and deployed by MobileApp."""
+"""Healthcare Practitioner profile fields owned and deployed by MobileApp."""
 
 import json
 
@@ -22,13 +22,31 @@ def setup_practitioner_diseases():
             "insert_after": "gender",
             "description": "Select the diseases this practitioner treats.",
             "module": "MobileApp",
+        }, {
+            "fieldname": "custom_about_doctor",
+            "label": "About Doctor",
+            "fieldtype": "Small Text",
+            "insert_after": "sr_diseases",
+            "description": "Introduce the doctor, their experience, and areas of expertise.",
+            "module": "MobileApp",
+        }, {
+            "fieldname": "custom_accept_opd_appointments",
+            "label": "Accept OPD Appointments",
+            "fieldtype": "Check",
+            "insert_after": "custom_accept_online_appointments",
+            "default": "1",
+            "hidden": 1,
+            "description": "Allow in-person outpatient consultations in mobile bookings.",
+            "module": "MobileApp",
         }]
     }, ignore_validate=True)
 
-    # Retain all existing layout customizations and place only this field.
-    fields = [field.fieldname for field in frappe.get_meta("Healthcare Practitioner").fields]
-    fields.remove("sr_diseases")
-    fields.insert(fields.index("gender") + 1, "sr_diseases")
+    # Retain existing layout customizations while grouping these profile fields.
+    profile_fields = ["sr_diseases", "custom_about_doctor"]
+    fields = [field.fieldname for field in frappe.get_meta("Healthcare Practitioner").fields
+              if field.fieldname not in profile_fields]
+    position = fields.index("gender") + 1
+    fields[position:position] = profile_fields
     filters = {
         "doc_type": "Healthcare Practitioner",
         "doctype_or_field": "DocType",

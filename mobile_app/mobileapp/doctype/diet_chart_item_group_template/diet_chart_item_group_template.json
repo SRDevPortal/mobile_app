@@ -1,0 +1,25 @@
+{
+ "actions": [],
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": ["item_group_template"],
+ "fields": [
+  {
+   "fieldname": "item_group_template",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item Group Template",
+   "options": "Item Group Template",
+   "reqd": 1
+  }
+ ],
+ "istable": 1,
+ "links": [],
+ "module": "MobileApp",
+ "name": "Diet Chart Item Group Template",
+ "permissions": [],
+ "sort_field": "idx",
+ "sort_order": "ASC",
+ "states": []
+}

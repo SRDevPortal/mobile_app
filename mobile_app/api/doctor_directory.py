@@ -3,7 +3,7 @@ from datetime import timedelta
 from html import unescape
 
 import frappe
-from frappe.utils import getdate, get_system_timezone, now_datetime
+from frappe.utils import flt, getdate, get_system_timezone, now_datetime
 from mobile_app.api.practitioners import _practitioner, _bookings
 from mobile_app.mobileapp.doctor_schedule import validate_slots, build_weekly_slots, calendar_days
 
@@ -25,8 +25,11 @@ def _details(doc):
     diseases = list(dict.fromkeys(unescape(row.disease).strip()
         for row in doc.get("sr_diseases") or [] if row.get("disease") and unescape(row.disease).strip()))
     return {"id": doc.name, "name": doc.practitioner_name or doc.name,
-            "diseases": diseases,
+            "diseases": diseases, "about_doctor": doc.get("custom_about_doctor") or "",
+            "op_consulting_charge": flt(doc.get("op_consulting_charge")),
+            "inpatient_visit_charge": flt(doc.get("inpatient_visit_charge")),
             "accepts_online_appointments": bool(frappe.utils.cint(doc.get("custom_accept_online_appointments"))),
+            "accepts_opd_appointments": bool(frappe.utils.cint(doc.get("custom_accept_opd_appointments", 1))),
             "department": doc.get("department") or "", "qualification": doc.get("sr_qualification") or "",
             "status": doc.status, "phone": doc.get("mobile_phone") or doc.get("mobile_no") or "",
             "email": doc.get("email_id") or "", "hospital": doc.get("hospital") or "",
@@ -103,7 +106,7 @@ def _lock_doctor(practitioner_id, expected_modified):
 
 def _check_modified(doc, expected):
     if not expected or str(doc.modified) != str(expected):
-        frappe.throw("The schedule changed. Refresh the doctor details before saving again.", frappe.TimestampMismatchError)
+        frappe.throw("The doctor details or schedule changed. Refresh before saving again.", frappe.TimestampMismatchError)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -251,6 +254,26 @@ def save_leave_range(practitioner_id, doctor_modified, start_date, end_date, exp
 
 
 @frappe.whitelist(methods=["POST"])
+def set_appointment_modes(practitioner_id, doctor_modified, opd_enabled, online_enabled):
+    if any(str(value) not in {"0", "1"} for value in (opd_enabled, online_enabled)):
+        frappe.throw("Choose enabled or disabled for OPD and online appointments.")
+    doc = _lock_doctor(practitioner_id, doctor_modified)
+    values = {
+        "custom_accept_opd_appointments": int(opd_enabled),
+        "custom_accept_online_appointments": int(online_enabled),
+    }
+    if any(not doc.meta.has_field(field) for field in values):
+        frappe.throw("Appointment settings require the mobile_app migration.")
+    # Save both choices together without revalidating unrelated imported links.
+    frappe.db.set_value(doc.doctype, doc.name, values)
+    frappe.clear_document_cache(doc.doctype, doc.name)
+    doc.reload()
+    doc.notify_update()
+    return {"accepts_opd_appointments": bool(int(opd_enabled)),
+            "accepts_online_appointments": bool(int(online_enabled)), "modified": str(doc.modified)}
+
+
+@frappe.whitelist(methods=["POST"])
 def set_online_appointments(practitioner_id, doctor_modified, enabled):
     if str(enabled) not in {"0", "1"}:
         frappe.throw("Choose enabled or disabled.")
@@ -263,3 +286,18 @@ def set_online_appointments(practitioner_id, doctor_modified, enabled):
     doc.reload()
     doc.notify_update()
     return {"enabled": bool(int(enabled)), "modified": str(doc.modified)}
+
+
+@frappe.whitelist(methods=["POST"])
+def set_about_doctor(practitioner_id, doctor_modified, about_doctor):
+    doc = _lock_doctor(practitioner_id, doctor_modified)
+    if not isinstance(about_doctor, str):
+        frappe.throw("About Doctor must be text.")
+    if not doc.meta.has_field("custom_about_doctor"):
+        frappe.throw("About Doctor requires the mobile_app migration.")
+    # Preserve unrelated imported profile links, as with online availability.
+    frappe.db.set_value(doc.doctype, doc.name, "custom_about_doctor", about_doctor.strip())
+    frappe.clear_document_cache(doc.doctype, doc.name)
+    doc.reload()
+    doc.notify_update()
+    return {"about_doctor": doc.custom_about_doctor or "", "modified": str(doc.modified)}

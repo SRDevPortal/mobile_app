@@ -6,11 +6,13 @@ app_email = "admin@example.com"
 app_license = "mit"
 
 after_install = [
+    "mobile_app.diet_chart_setup.after_migrate",
     "mobile_app.calendar_setup.after_migrate",
     "mobile_app.opd_setup.after_migrate",
     "mobile_app.practitioner_setup.setup_practitioner_diseases",
 ]
 after_migrate = [
+    "mobile_app.diet_chart_setup.after_migrate",
     "mobile_app.calendar_setup.after_migrate",
     "mobile_app.opd_setup.after_migrate",
     "mobile_app.practitioner_setup.setup_practitioner_diseases",
@@ -50,6 +52,7 @@ app_include_js = [
 # app_include_js = "/assets/mobile_app/js/mobile_app.js"
 
 doctype_js = {
+    "Diet Chart": "public/js/diet_chart.js",
 	"Mobile App User": [
 		"public/js/mobile_app_clinical_ui.js",
 		"public/js/mobile_app_support_ticket_ui.js",
@@ -290,6 +293,9 @@ permission_query_conditions = {
 
 # Appointment operations status is maintained independently of clinical/billing status.
 doc_events = {
+    "Diet Chart": {
+        "validate": "mobile_app.diet_chart_setup.validate_pdf",
+    },
     "Patient Encounter": {
         "before_validate": "mobile_app.api.appointment_calendar.sync_encounter_status",
         "on_cancel": "mobile_app.api.appointment_calendar.sync_encounter_status",

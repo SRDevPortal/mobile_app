@@ -63,7 +63,7 @@ frappe.provide("mobile_app");
             const doctors = this.doctors.filter(d => [d.name, ...(d.diseases || []), d.phone].join(" ").toLowerCase().includes(query));
             this.$root.find(".dd-list").html(doctors.length ? doctors.map(d => `<button class="dd-person ${d.id === this.selected ? "selected" : ""}" data-practitioner="${esc(d.id)}" aria-pressed="${d.id === this.selected}">
                 <span class="dd-avatar" aria-hidden="true">${esc(d.name.replace(/^Dr\.?\s*/i, "").split(" ").map(p => p[0]).slice(0, 2).join(""))}</span>
-                <span><strong>${esc(d.name)}</strong><small>${esc((d.diseases || []).join(", ") || "No diseases selected")}</small><small>${esc(d.status)}</small></span></button>`).join("") : '<p class="dd-empty">No matching doctors.</p>');
+                <span><strong>${esc(d.name)}</strong><small>${esc(d.status)}</small></span></button>`).join("") : '<p class="dd-empty">No matching doctors.</p>');
         }
         async load() {
             if (!this.selected) return;
@@ -86,16 +86,32 @@ frappe.provide("mobile_app");
         renderDetail() {
             const d = this.data.doctor;
             this.$root.find(".dd-calendar").fullCalendar("destroy");
-            this.$root.find(".dd-detail").prop("hidden", false).html(`<div class="dd-profile"><div><h2>${esc(d.name)}</h2>
+            this.$root.find(".dd-detail").prop("hidden", false).html(`<section class="dd-profile-card"><div class="dd-profile"><span class="dd-profile-avatar" aria-hidden="true">${esc(d.name.replace(/^Dr\.?\s+/i, "").split(/\s+/).slice(0, 2).map(part => part[0]).join(""))}</span><div><h2>${esc(d.name)}</h2>
                 <p>${esc([d.qualification, d.hospital].filter(Boolean).join(" · ") || "Healthcare practitioner")}</p>
-                <p>Diseases: ${esc((d.diseases || []).join(", ") || "No diseases selected")}</p></div>
+                <div class="dd-specialties" aria-label="Diseases">${(d.diseases || []).length ? d.diseases.map(disease => `<span>${esc(disease)}</span>`).join("") : '<span>No diseases selected</span>'}</div></div>
                 <span class="dd-status">${esc(d.status)}</span><button class="ac-btn" data-dd="profile">${d.can_edit ? "Edit doctor details" : "View doctor details"}</button></div>
-                <div class="dd-contact"><span>Phone: ${esc(d.phone || "Not provided")}</span><span>Email: ${esc(d.email || "Not provided")}</span></div>
-                <fieldset class="dd-online-setting" ${d.can_edit ? "" : "disabled"} style="margin:16px 0;padding:16px;border:1px solid #dce5e3;border-radius:12px">
-                    <legend style="font-size:16px">Online appointments</legend>
-                    <label><input type="checkbox" class="dd-online-enabled" ${d.accepts_online_appointments ? "checked" : ""}> Accept online appointments</label>
-                    <p class="dd-note">Only marked doctors appear for online consultations in the mobile app.</p>
-                    <button class="ac-btn ac-primary" data-dd="save-online">Save online availability</button>
+                <div class="dd-contact"><span>Phone: ${esc(d.phone || "Not provided")}</span><span>Email: ${esc(d.email || "Not provided")}</span></div></section>
+                <div class="dd-summary">
+                <section class="dd-about" aria-labelledby="dd-about-title">
+                    <div class="dd-about-heading"><h3 id="dd-about-title">About Doctor</h3>
+                        ${d.can_edit ? '<button class="ac-btn" data-dd="edit-about">Edit About Doctor</button>' : ""}</div>
+                    <p class="dd-about-text" ${d.about_doctor ? "" : 'data-empty="true"'}>${esc(d.about_doctor || "No information added yet.")}</p>
+                </section>
+                <section class="dd-charges" aria-labelledby="dd-charges-title">
+                    <h3 id="dd-charges-title">Charges</h3>
+                    <dl class="dd-charge-list">
+                        <div><dt>Out Patient Consulting Charge</dt><dd data-charge="outpatient">${esc(format_currency(d.op_consulting_charge, undefined, 2))}</dd></div>
+                    </dl>
+                </section>
+                </div>
+                <fieldset class="dd-online-setting" ${d.can_edit ? "" : "disabled"}>
+                    <legend style="font-size:16px">Appointment types</legend>
+                    <div class="dd-appointment-choices">
+                        <label><input type="checkbox" class="dd-opd-enabled" ${d.accepts_opd_appointments ? "checked" : ""}> OPD (in-person)</label>
+                        <label><input type="checkbox" class="dd-online-enabled" ${d.accepts_online_appointments ? "checked" : ""}> Online</label>
+                    </div>
+                    <p class="dd-note">Select OPD, Online, or both. Online enables consultations in the mobile app.</p>
+                    <button class="ac-btn ac-primary" data-dd="save-appointment-modes">Save appointment types</button>
                     <div class="dd-online-error" role="alert"></div>
                 </fieldset>
                 <div class="dd-mode" role="group" aria-label="Availability editing mode">
@@ -112,7 +128,7 @@ frappe.provide("mobile_app");
             const events = this.data.calendar_days.map(day => ({
                 title: day.status === 'working' ? 'Available' : day.status === 'leave' ? 'Leave / Holiday' : day.status === 'inactive' ? 'Inactive' : 'Weekly off',
                 start: day.date, allDay: true,
-                color: day.status === 'working' ? '#176b63' : ['leave', 'off'].includes(day.status) ? '#a33d50' : '#60767b'
+                color: day.status === 'working' ? '#11665e' : day.status === 'leave' ? '#9f2d49' : '#526278'
             }));
             const choose = (value, last=value) => this.leaveDraft(() => {
                 this.date = value.format("YYYY-MM-DD"); this.leaveStart = this.date; this.leaveEnd = last.format("YYYY-MM-DD");
@@ -235,7 +251,8 @@ frappe.provide("mobile_app");
         }
         action(action) {
             if (this.saving) return;
-            if (action === "save-online") return this.leaveDraft(() => this.saveOnline());
+            if (action === "edit-about") return this.editAbout();
+            if (action === "save-appointment-modes") return this.leaveDraft(() => this.saveAppointmentModes());
             if (action === "refresh") return this.leaveDraft(() => this.refresh());
             if (action === "profile") return this.leaveDraft(() => frappe.set_route("Form", "Healthcare Practitioner", this.selected));
             if (["prev", "next", "today"].includes(action)) return this.leaveDraft(() => {
@@ -247,19 +264,61 @@ frappe.provide("mobile_app");
             if (action === "reset") return this.leaveDraft(() => this.load());
             if (action === "save") return this.save();
         }
-        async saveOnline() {
+        editAbout() {
+            const doctor = this.data.doctor;
+            if (!doctor.can_edit) return;
+            const dialog = new frappe.ui.Dialog({
+                title: "About Doctor",
+                fields: [{fieldname: "about_doctor", label: "About Doctor", fieldtype: "Small Text",
+                    default: doctor.about_doctor || "", description: "Introduce the doctor, their experience, and areas of expertise."},
+                    {fieldname: "save_error", fieldtype: "HTML", options: '<div role="alert" class="text-danger"></div>'}],
+                primary_action_label: "Save",
+                primary_action: async values => {
+                    if (this.saving) return;
+                    this.saving = true;
+                    dialog.fields_dict.save_error.$wrapper.find('[role="alert"]').text("");
+                    dialog.get_primary_btn().prop("disabled", true);
+                    try {
+                        const result = await frappe.xcall(`${API}.set_about_doctor`, {
+                            practitioner_id: doctor.id, doctor_modified: doctor.modified,
+                            about_doctor: values.about_doctor || ""
+                        });
+                        Object.assign(doctor, result);
+                        const listed = this.doctors.find(item => item.id === doctor.id);
+                        if (listed) Object.assign(listed, result);
+                        // Update only the profile text so unsaved schedule edits remain intact.
+                        if (this.data.doctor.id === doctor.id) {
+                            this.$root.find(".dd-about-text").text(result.about_doctor || "No information added yet.")
+                                .attr("data-empty", result.about_doctor ? null : "true");
+                        }
+                        dialog.hide();
+                        frappe.show_alert({message: "About Doctor saved", indicator: "green"});
+                    } catch (e) {
+                        dialog.fields_dict.save_error.$wrapper.find('[role="alert"]').text(
+                            "About Doctor was not saved. Refresh doctor details if they changed, then try again.");
+                    } finally {
+                        this.saving = false;
+                        dialog.get_primary_btn().prop("disabled", false);
+                    }
+                }
+            });
+            dialog.show();
+        }
+        async saveAppointmentModes() {
             if (this.saving || !this.data.doctor.can_edit) return;
-            const enabled = this.$root.find('.dd-online-enabled').prop('checked');
+            const onlineEnabled = this.$root.find('.dd-online-enabled').prop('checked');
+            const opdEnabled = this.$root.find('.dd-opd-enabled').prop('checked');
             this.saving = true;
             this.$root.find('.dd-online-setting').prop('disabled', true);
             try {
-                await frappe.xcall(`${API}.set_online_appointments`, {
-                    practitioner_id: this.selected, doctor_modified: this.data.doctor.modified, enabled: enabled ? 1 : 0
+                await frappe.xcall(`${API}.set_appointment_modes`, {
+                    practitioner_id: this.selected, doctor_modified: this.data.doctor.modified,
+                    opd_enabled: opdEnabled ? 1 : 0, online_enabled: onlineEnabled ? 1 : 0
                 });
                 await this.load();
-                frappe.show_alert({message: 'Online availability saved', indicator: 'green'});
+                frappe.show_alert({message: 'Appointment types saved', indicator: 'green'});
             } catch (e) {
-                this.$root.find('.dd-online-error').text('Online availability was not saved. Refresh doctor details and try again.');
+                this.$root.find('.dd-online-error').text('Appointment types were not saved. Refresh doctor details and try again.');
             } finally {
                 this.saving = false;
                 this.$root.find('.dd-online-setting').prop('disabled', !this.data.doctor.can_edit);

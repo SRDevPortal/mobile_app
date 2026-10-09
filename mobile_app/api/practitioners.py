@@ -32,7 +32,9 @@ def _public_doctor(doc, schedules):
     return {"id": doc.name, "name": doc.practitioner_name or doc.name,
             "specialty": doc.get("sr_qualification") or doc.get("department") or "",
             "tags": tags, "image_url": doc.get("image") or "", "is_active": True,
+            "about_doctor": doc.get("custom_about_doctor") or "",
             "accepts_online_appointments": bool(frappe.utils.cint(doc.get("custom_accept_online_appointments"))),
+            "accepts_opd_appointments": bool(frappe.utils.cint(doc.get("custom_accept_opd_appointments", 1))),
             "schedules": [{"id": s["name"], "service_unit": s.get("service_unit") or "",
                            "days": sorted({r.day for r in s["time_slots"]})} for s in schedules]}
 
@@ -111,6 +113,8 @@ def validate_appointment(doc):
             or consultation.strip().lower() == "online consultation"):
         if not frappe.utils.cint(practitioner.get("custom_accept_online_appointments")):
             frappe.throw("This doctor does not accept online appointments. Please choose another doctor.")
+    elif not frappe.utils.cint(practitioner.get("custom_accept_opd_appointments", 1)):
+        frappe.throw("This doctor does not accept OPD appointments. Please choose another doctor.")
     requested = clock(seconds(doc.appointment_time))
     slots = _availability(practitioner, doc.appointment_date, doc.booking_id, lock=True)
     slot = next((s for s in slots if s["time"] == requested and

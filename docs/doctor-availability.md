@@ -76,3 +76,40 @@ preserved rather than causing a whole-profile save failure. The missing-link
 regression test covers creation and updates, including profile/link preservation.
 The affected local Dr Aayushi Pathak record was also tested with all temporary
 schedule changes rolled back.
+
+
+## About Doctor
+
+Healthcare Practitioner includes a plain-text **About Doctor** field (`custom_about_doctor`)
+after Diseases. MobileApp creates and positions it through its install/migration hook.
+The Doctors panel on `/app/doctor-clinical` displays the same value and provides
+**Edit About Doctor** to users with write access to that practitioner. Saving the
+biography preserves unsaved availability edits and rejects stale profile changes.
+
+Both directory responses and `mobile_app.api.practitioners.list_doctors` expose
+`about_doctor` as a string, empty when no biography has been entered. Mobile clients
+should display this as plain text. Changes saved in either the practitioner form or
+the Doctors panel are reflected in the shared field and API response.
+
+
+## Practitioner charges
+
+The Doctors panel displays **Out Patient Consulting Charge** beneath About Doctor.
+The value comes directly from the selected Healthcare Practitioner
+(`op_consulting_charge`), including zero amounts, and uses the site's currency and
+number formatting. Edit the amount on the practitioner form, save, then refresh the
+Doctors panel to see the current charge.
+
+## Appointment types
+
+In the Doctors panel, select **OPD (in-person)**, **Online**, or both, then click
+**Save appointment types**. Both can be disabled to stop new mobile bookings.
+OPD defaults to enabled to preserve existing booking behavior; existing Online
+choices are retained. Saving checks practitioner write access and rejects stale
+edits. Existing appointments are retained.
+
+Directory and mobile practitioner responses include `accepts_opd_appointments`
+and `accepts_online_appointments`. Mobile booking validation rejects a new or
+rescheduled booking when its appointment type is disabled. Existing OPD queue
+operations and clinic check-in are unchanged. The prior online-only API remains
+compatible and changes only the Online option.

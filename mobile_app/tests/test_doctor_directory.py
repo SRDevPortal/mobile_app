@@ -13,8 +13,12 @@ class TestDoctorDirectory(unittest.TestCase):
         self.user = frappe.session.user
         frappe.set_user("Administrator")
         self.suffix = frappe.generate_hash(length=10)
+        self.pathy = None
+        if frappe.get_meta("Healthcare Practitioner").has_field("sr_pathy"):
+            self.pathy = frappe.get_doc({"doctype": "SR Practitioner Pathy",
+                "sr_pathy_name": "Schedule Test Pathy " + self.suffix}).insert().name
         self.doctor = frappe.get_doc({"doctype": "Healthcare Practitioner", "first_name": "Schedule Test " + self.suffix,
-            "practitioner_name": "Schedule Test " + self.suffix, "status": "Active", "sr_qualification": "Test"}).insert()
+            "practitioner_name": "Schedule Test " + self.suffix, "status": "Active", "sr_qualification": "Test", "sr_pathy": self.pathy}).insert()
         self.date = "2099-01-07"  # Wednesday
         self.rows = [{"day": "Wednesday", "from_time": "10:00", "to_time": "10:30", "maximum_appointments": 1}]
 
@@ -152,7 +156,7 @@ class TestDoctorDirectory(unittest.TestCase):
     def test_shared_schedule_is_copied_for_selected_doctor(self):
         original = self.weekly()["schedule_id"]
         other = frappe.get_doc({"doctype": "Healthcare Practitioner", "first_name": "Other " + self.suffix,
-            "practitioner_name": "Other " + self.suffix, "status": "Active", "sr_qualification": "Test",
+            "practitioner_name": "Other " + self.suffix, "status": "Active", "sr_qualification": "Test", "sr_pathy": self.pathy,
             "practitioner_schedules": [{"schedule": original}]}).insert()
         self.assertTrue(self.details()["schedules"][0]["shared"])
         updated = self.weekly([{**self.rows[0], "from_time": "11:00", "to_time": "11:30"}])["schedule_id"]
@@ -249,3 +253,110 @@ class TestDoctorDirectory(unittest.TestCase):
         self.doctor.status = "Disabled"
         self.doctor.save()
         self.assertEqual(availability(self.doctor.name, self.date)["slots"], [])
+
+
+    def test_about_doctor_shared_with_practitioner_form_and_mobile_api(self):
+        from mobile_app.api import practitioners
+        self.weekly()
+        text = "Dr Example's experience & interests.\nPatient-focused care <not HTML>."
+        saved = api.set_about_doctor(self.doctor.name, self.details()["doctor"]["modified"], text)
+        self.doctor.reload()
+        self.assertEqual(self.doctor.custom_about_doctor, text)
+        self.assertEqual(self.details()["doctor"]["about_doctor"], text)
+        mobile = next(d for d in practitioners.list_doctors()["doctors"] if d["id"] == self.doctor.name)
+        self.assertEqual(mobile["about_doctor"], text)
+        self.assertEqual(saved["modified"], str(self.doctor.modified))
+        # Changes made through the standard practitioner form use the same value.
+        self.doctor.custom_about_doctor = "Updated from practitioner form"
+        self.doctor.save()
+        self.assertEqual(self.details()["doctor"]["about_doctor"], self.doctor.custom_about_doctor)
+        cleared = api.set_about_doctor(self.doctor.name, str(self.doctor.modified), "")
+        self.assertEqual(cleared["about_doctor"], "")
+        self.assertEqual(self.details()["doctor"]["about_doctor"], "")
+
+    def test_about_doctor_rejects_stale_edits(self):
+        original = self.details()["doctor"]["modified"]
+        api.set_about_doctor(self.doctor.name, original, "First edit")
+        with self.assertRaises(frappe.TimestampMismatchError):
+            api.set_about_doctor(self.doctor.name, original, "Stale edit")
+        self.assertEqual(self.details()["doctor"]["about_doctor"], "First edit")
+
+    def test_about_doctor_requires_write_permission(self):
+        modified = self.details()["doctor"]["modified"]
+        with patch.object(type(self.doctor), "has_permission", side_effect=lambda permtype="read", **kwargs: permtype != "write"):
+            with self.assertRaises(frappe.PermissionError):
+                api.set_about_doctor(self.doctor.name, modified, "Not permitted")
+        frappe.set_user("Guest")
+        with self.assertRaises(frappe.PermissionError):
+            api.set_about_doctor(self.doctor.name, modified, "Not permitted")
+
+    def test_about_doctor_preserves_unrelated_imported_links(self):
+        missing = "Missing department " + self.suffix
+        frappe.db.set_value("Healthcare Practitioner", self.doctor.name, "department", missing)
+        api.set_about_doctor(self.doctor.name, self.details()["doctor"]["modified"], "A short biography")
+        self.doctor.reload()
+        self.assertEqual(self.doctor.department, missing)
+        self.assertEqual(self.doctor.custom_about_doctor, "A short biography")
+        with self.assertRaises(frappe.ValidationError):
+            api.set_about_doctor(self.doctor.name, str(self.doctor.modified), {"unexpected": "object"})
+
+    def test_appointment_modes_save_independently_and_preserve_legacy_links(self):
+        from mobile_app.api import practitioners
+        self.weekly()
+        missing = "Missing department " + self.suffix
+        frappe.db.set_value(self.doctor.doctype, self.doctor.name, "department", missing)
+        for opd, online in [(1, 0), (0, 1), (1, 1), (0, 0)]:
+            saved = api.set_appointment_modes(self.doctor.name, self.details()["doctor"]["modified"], opd, online)
+            self.doctor.reload()
+            self.assertEqual(self.doctor.department, missing)
+            self.assertEqual(self.doctor.custom_accept_opd_appointments, opd)
+            self.assertEqual(self.doctor.custom_accept_online_appointments, online)
+            mobile = next(d for d in practitioners.list_doctors()["doctors"] if d["id"] == self.doctor.name)
+            for key, value in [("accepts_opd_appointments", bool(opd)), ("accepts_online_appointments", bool(online))]:
+                self.assertEqual(saved[key], value)
+                self.assertEqual(mobile[key], value)
+                self.assertEqual(self.details()["doctor"][key], value)
+        # Existing callers that only change Online must preserve the OPD choice.
+        api.set_online_appointments(self.doctor.name, str(self.doctor.modified), 1)
+        self.doctor.reload()
+        self.assertEqual(self.doctor.custom_accept_opd_appointments, 0)
+
+    def test_appointment_modes_reject_stale_invalid_and_unauthorized_edits(self):
+        original = self.details()["doctor"]["modified"]
+        api.set_appointment_modes(self.doctor.name, original, 1, 1)
+        with self.assertRaises(frappe.TimestampMismatchError):
+            api.set_appointment_modes(self.doctor.name, original, 0, 0)
+        modified = self.details()["doctor"]["modified"]
+        with self.assertRaises(frappe.ValidationError):
+            api.set_appointment_modes(self.doctor.name, modified, 2, 0)
+        with patch.object(type(self.doctor), "has_permission", side_effect=lambda permtype="read", **kwargs: permtype != "write"):
+            with self.assertRaises(frappe.PermissionError):
+                api.set_appointment_modes(self.doctor.name, modified, 0, 0)
+        frappe.set_user("Guest")
+        with self.assertRaises(frappe.PermissionError):
+            api.set_appointment_modes(self.doctor.name, modified, 0, 0)
+
+    def test_appointment_modes_control_new_mobile_bookings_and_preserve_existing(self):
+        from mobile_app.api.practitioners import validate_appointment
+        self.weekly()
+        for opd, online in [(1, 0), (0, 1), (1, 1), (0, 0)]:
+            api.set_appointment_modes(self.doctor.name, self.details()["doctor"]["modified"], opd, online)
+            for consultation, enabled in [("OPD Consultation", opd), ("https://meet.google.com/abc-defg-hij", online)]:
+                booking = frappe.get_doc({"doctype": "Mobile App Appointment", "appointment_external_id": self.suffix,
+                    "booking_id": self.suffix, "practitioner_id": self.doctor.name, "appointment_date": self.date,
+                    "appointment_time": "10:00:00", "consultation_type": consultation, "status": "Confirmed"})
+                if enabled:
+                    validate_appointment(booking)
+                    self.assertEqual(booking.duration, 30)
+                else:
+                    with self.assertRaisesRegex(frappe.ValidationError, "does not accept"):
+                        validate_appointment(booking)
+        api.set_appointment_modes(self.doctor.name, self.details()["doctor"]["modified"], 1, 0)
+        booking = frappe.get_doc({"doctype": "Mobile App Appointment", "appointment_external_id": self.suffix,
+            "booking_id": self.suffix, "practitioner_id": self.doctor.name, "appointment_date": self.date,
+            "appointment_time": "10:00:00", "consultation_type": "OPD Consultation", "status": "Confirmed"}).insert()
+        api.set_appointment_modes(self.doctor.name, self.details()["doctor"]["modified"], 0, 0)
+        booking.reload()
+        booking.patient_name = "Updated patient name"
+        booking.save()
+        self.assertEqual(booking.status, "Confirmed")
