@@ -90,8 +90,9 @@ class TestOPDQueue(unittest.TestCase):
         self.assertEqual(self.act(session,'call_next')['visit'],a['name'])
         with self.assertRaises(frappe.ValidationError): api.visit_action(self.clinic,self.req(),a['name'],self.stage(a)['revision'],'withdraw','Leaving')
 
-    def test_doctor_mismatch_and_atomic_setup(self):
-        with self.assertRaises(frappe.ValidationError): api.check_in(self.clinic,self.req(),self.departments[0],self.doctors[1],patient='unused')
+    def test_unassigned_active_doctor_and_atomic_setup(self):
+        route = api._route(self.clinic, self.departments[0], self.doctors[1])
+        self.assertEqual(route.department, self.departments[0])
         self.assertEqual(len(store.records('Visit',{'clinic':self.clinic})),0)
         setup=api.get_setup(self.clinic); setup['rooms'][0]['room_label']='Must rollback'; setup['routes'][0]['vitals_room']=self.rooms['4']
         with self.assertRaises(frappe.ValidationError): api.save_setup(self.clinic,self.req(),setup['config_version'],setup['rooms'],setup['routes'])

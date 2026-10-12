@@ -25,6 +25,7 @@ def _details(doc):
     diseases = list(dict.fromkeys(unescape(row.disease).strip()
         for row in doc.get("sr_diseases") or [] if row.get("disease") and unescape(row.disease).strip()))
     return {"id": doc.name, "name": doc.practitioner_name or doc.name,
+            "image": doc.get("image") or "",
             "diseases": diseases, "about_doctor": doc.get("custom_about_doctor") or "",
             "op_consulting_charge": flt(doc.get("op_consulting_charge")),
             "inpatient_visit_charge": flt(doc.get("inpatient_visit_charge")),

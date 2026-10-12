@@ -318,3 +318,6 @@ doc_events.setdefault("Clinic Appointment", {})["before_validate"] = "mobile_app
 
 doc_events.setdefault("Healthcare Settings", {})["validate"] = "mobile_app.opd_store.protect_settings"
 doc_events.setdefault("Mobile Appointment Workflow", {})["validate"] = "mobile_app.opd_store.protect_workflow"
+
+# Durable token outbox and delivery reconciliation.
+scheduler_events = {"cron": {"* * * * *": ["mobile_app.token_notifications.process_pending"]}}

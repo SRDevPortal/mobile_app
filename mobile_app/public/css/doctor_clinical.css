@@ -28,7 +28,7 @@
 body.ma-calendar-active .container.page-body {max-width:none;padding:0}
 .ma-calendar-page .page-head {display:none}
 .ma-calendar-page .layout-main-section {border:0;background:#fff;padding:0!important}
-.ma-calendar-page .layout-main-section-wrapper {margin:0}
+.ma-calendar-page .layout-main-section-wrapper {margin:0;padding:0}
 .ma-calendar-page .page-content {padding:0}
 .ma-calendar-page .row.layout-main {margin:0}
 .ma-calendar-page .layout-main > .col {padding:0}
@@ -370,7 +370,7 @@ body.ma-calendar-active .container.page-body {max-width:none;padding:0}
 .dd-person.selected {background:#eaf7f0;border-color:#b8d8ca;box-shadow:inset 3px 0 var(--ac-brand)}
 .dd-person strong {font-size:13px;margin-bottom:6px;line-height:1.4}
 .dd-person small {font-size:11px;line-height:1.55;opacity:1}
-.dd-avatar {width:40px;height:40px;font-size:13px;background:#e3f1ed;color:var(--ac-brand)}
+.dd-avatar {width:40px;height:40px;border-radius:8px;font-size:13px;background:#e3f1ed;color:var(--ac-brand)}
 .dd-person:nth-child(2n) .dd-avatar {background:#f1eafa;color:#6941a5}
 .dd-person:nth-child(3n) .dd-avatar {background:#fff2da;color:#8a570b}
 .dd-content {padding:24px;min-width:0}
@@ -378,7 +378,7 @@ body.ma-calendar-active .container.page-body {max-width:none;padding:0}
 .dd-profile-card {padding:22px;margin-bottom:18px;border-top:3px solid var(--ac-brand)}
 .dd-profile {gap:14px;align-items:center}
 .dd-profile > div {flex:1 1 240px;min-width:0}
-.dd-profile-avatar {display:flex;align-items:center;justify-content:center;width:62px;height:62px;flex-shrink:0;background:#def2e9;color:var(--ac-brand);border-radius:18px;font-size:23px;font-weight:700}
+.dd-profile-avatar {display:flex;align-items:center;justify-content:center;width:120px;height:120px;flex-shrink:0;background:#def2e9;color:var(--ac-brand);border-radius:18px;font-size:23px;font-weight:700}
 .dd-content h2 {font-size:22px;letter-spacing:-.4px;margin-bottom:8px;font-weight:700}
 .dd-content h3 {font-size:16px;font-weight:650}
 .dd-profile p {font-size:13px;line-height:1.6}
@@ -415,6 +415,9 @@ body.ma-calendar-active .container.page-body {max-width:none;padding:0}
 .dd-calendar th {font-size:11px;font-weight:600;padding:12px 2px}
 .dd-key {font-size:11px;margin:12px 4px}
 @media(min-width:1600px){.ac-panel{width:360px}}
-@media(max-width:1200px){.dd-summary{grid-template-columns:1fr}.dd-charge-list dd{margin-top:4px}.dd-sidebar{width:230px}.ac-panel{width:290px}.dd-profile-avatar{width:50px;height:50px;font-size:19px}}
+@media(max-width:1200px){.dd-summary{grid-template-columns:1fr}.dd-charge-list dd{margin-top:4px}.dd-sidebar{width:230px}.ac-panel{width:290px}.dd-profile-avatar{width:100px;height:100px;font-size:32px}}
 @media(max-width:800px){.ac-doctors{width:100%;padding:8px 0}.ac-doctor{width:auto;min-width:145px;margin:2px 5px}.ac-sidebar-note{display:none}.ac-panel{width:100%}.ac-topbar{padding:14px 12px}.ac-toolbar{padding:10px 8px}.ac-topbar h1{font-size:21px}.dd-content{padding:16px}.dd-profile-card{padding:16px}.dd-about,.dd-charges{padding:16px}}
-@media(max-width:650px){.dd-sidebar{width:100%;padding:16px}.dd-list{max-height:185px}.dd-content{padding:14px 10px}.dd-summary{gap:12px;margin-bottom:14px}.dd-content h2{font-size:19px}.dd-profile>div{flex-basis:180px}.dd-profile{gap:10px}.dd-profile-avatar{width:44px;height:44px;font-size:17px;border-radius:12px}.dd-online-setting,.dd-editor{padding:14px}.dd-appointment-choices label{min-width:0;flex:1 1 100px;font-size:12px;padding:10px}.dd-setting strong{font-size:12px}.dd-setting span{font-size:11px}.ac-btn.dd-setting{padding:12px!important}.dd-calendar{padding:6px}.dd-date-actions{flex-wrap:wrap}.dd-toolbar{gap:10px}.dd-calendar th{font-size:9px}}
+@media(max-width:650px){.dd-sidebar{width:100%;padding:16px}.dd-list{max-height:185px}.dd-content{padding:14px 10px}.dd-summary{gap:12px;margin-bottom:14px}.dd-content h2{font-size:19px}.dd-profile>div{flex-basis:180px}.dd-profile{gap:10px}.dd-profile-avatar{width:80px;height:80px;font-size:28px;border-radius:12px}.dd-online-setting,.dd-editor{padding:14px}.dd-appointment-choices label{min-width:0;flex:1 1 100px;font-size:12px;padding:10px}.dd-setting strong{font-size:12px}.dd-setting span{font-size:11px}.ac-btn.dd-setting{padding:12px!important}.dd-calendar{padding:6px}.dd-date-actions{flex-wrap:wrap}.dd-toolbar{gap:10px}.dd-calendar th{font-size:9px}}
+
+.dd-avatar,.dd-profile-avatar{position:relative;overflow:hidden;box-shadow:rgba(0, 0, 0, 0.1) 0px 4px 12px}
+.dd-avatar img,.dd-profile-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit}

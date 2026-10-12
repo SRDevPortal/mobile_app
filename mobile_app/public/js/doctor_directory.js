@@ -3,12 +3,26 @@ frappe.provide("mobile_app");
 (() => {
     const API = "mobile_app.api.doctor_directory";
     const esc = value => frappe.utils.escape_html(String(value ?? ""));
+    const avatar = (doctor, className) => {
+        const initials = doctor.name.replace(/^Dr\.?\s*/i, '').split(/\s+/).filter(Boolean).slice(0,2).map(part=>part[0]).join('');
+        let photo = String(doctor.image || '');
+        if (photo.startsWith('/') && !photo.startsWith('//')) {
+            const url = new URL(photo, location.origin);
+            url.searchParams.set('v', doctor.modified || '');
+            photo = url.pathname + url.search;
+        }
+        const valid = /^(https?:\/\/|\/(?!\/))/.test(photo);
+        return `<span class="${className}" aria-hidden="true"><span>${esc(initials)}</span>${valid?`<img src="${esc(photo)}" alt="" loading="lazy">`:''}</span>`;
+    };
     const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
     const time = value => String(value || "").split(":").map(v => v.padStart(2, "0")).join(":").slice(0, 5);
 
     mobile_app.DoctorDirectory = class {
         constructor(owner, root) {
             this.owner = owner; this.$root = root; this.date = owner.date.format("YYYY-MM-DD");
+            root[0].addEventListener('error', event => {
+                if (event.target.matches('.dd-avatar img, .dd-profile-avatar img')) event.target.remove();
+            }, true);
             this.serial = 0; this.doctors = []; this.mode = "weekly"; this.dirty = false;
             root.html(`<header class="ac-topbar"><div><h1>Doctors</h1><span class="ac-subtitle">Doctor details and availability</span></div>
                 <button class="ac-btn" data-dd="refresh">Refresh doctors</button></header>
@@ -62,7 +76,7 @@ frappe.provide("mobile_app");
             const query = this.$root.find("#dd-search").val().trim().toLowerCase();
             const doctors = this.doctors.filter(d => [d.name, ...(d.diseases || []), d.phone].join(" ").toLowerCase().includes(query));
             this.$root.find(".dd-list").html(doctors.length ? doctors.map(d => `<button class="dd-person ${d.id === this.selected ? "selected" : ""}" data-practitioner="${esc(d.id)}" aria-pressed="${d.id === this.selected}">
-                <span class="dd-avatar" aria-hidden="true">${esc(d.name.replace(/^Dr\.?\s*/i, "").split(" ").map(p => p[0]).slice(0, 2).join(""))}</span>
+                ${avatar(d, "dd-avatar")}
                 <span><strong>${esc(d.name)}</strong><small>${esc(d.status)}</small></span></button>`).join("") : '<p class="dd-empty">No matching doctors.</p>');
         }
         async load() {
@@ -86,7 +100,7 @@ frappe.provide("mobile_app");
         renderDetail() {
             const d = this.data.doctor;
             this.$root.find(".dd-calendar").fullCalendar("destroy");
-            this.$root.find(".dd-detail").prop("hidden", false).html(`<section class="dd-profile-card"><div class="dd-profile"><span class="dd-profile-avatar" aria-hidden="true">${esc(d.name.replace(/^Dr\.?\s+/i, "").split(/\s+/).slice(0, 2).map(part => part[0]).join(""))}</span><div><h2>${esc(d.name)}</h2>
+            this.$root.find(".dd-detail").prop("hidden", false).html(`<section class="dd-profile-card"><div class="dd-profile">${avatar(d, "dd-profile-avatar")}<div><h2>${esc(d.name)}</h2>
                 <p>${esc([d.qualification, d.hospital].filter(Boolean).join(" · ") || "Healthcare practitioner")}</p>
                 <div class="dd-specialties" aria-label="Diseases">${(d.diseases || []).length ? d.diseases.map(disease => `<span>${esc(disease)}</span>`).join("") : '<span>No diseases selected</span>'}</div></div>
                 <span class="dd-status">${esc(d.status)}</span><button class="ac-btn" data-dd="profile">${d.can_edit ? "Edit doctor details" : "View doctor details"}</button></div>

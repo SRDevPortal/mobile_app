@@ -430,9 +430,8 @@ def _route(clinic, department, doctor):
         room = _get('Room', step['room'], clinic)
         if not room.enabled or (room.get('purpose_id') or room.purpose) != step['purpose_id']:
             frappe.throw('The department route contains an unavailable room.')
-    room = _doc('Room', route.consultation_room)
-    if _value('Healthcare Practitioner', doctor, 'status') != 'Active' or not any(a.practitioner == doctor for a in room.assignments):
-        frappe.throw('The consultation doctor is not assigned to this department\'s consultation room. Reassign the doctor or update setup.')
+    if _value('Healthcare Practitioner', doctor, 'status') != 'Active':
+        frappe.throw('Select an active consultation doctor.')
     return route
 
 
@@ -482,13 +481,48 @@ def _walkin_appointment(patient, doctor, clinic=None):
 
 
 @frappe.whitelist()
+def patient_checkin_context(clinic, patient):
+    """Resolve a selected patient to today's approved booking without guessing."""
+    _access(clinic); _require_reception()
+    from datetime import timedelta
+    from mobile_app.api.appointment_calendar import get_calendar
+    today = getdate()
+    matches = [row for row in get_calendar(today, today + timedelta(days=1))["appointments"]
+        if row["source_doctype"] == "Patient Encounter" and row.get("patient") == patient
+        and row["status"] == "Approved" and not row["online"] and row["clinic"] == clinic]
+    if len(matches) != 1:
+        frappe.throw("Select the intended approved appointment from the calendar to check in this patient.")
+    appointment = matches[0]
+    context = checkin_context(clinic, appointment["source_doctype"], appointment["name"])
+    if not context.get("department"):
+        context["department"] = frappe.db.get_value("Patient", patient, "sr_medical_department")
+    return {**context, "appointment": appointment}
+
+
+@frappe.whitelist()
 @frappe.validate_and_sanitize_search_inputs
 def patient_query(doctype, txt, searchfield, start, page_len, filters=None):
     _require_reception(); clinic = _json(filters or {}, dict).get('clinic'); _access(clinic)
+    from datetime import timedelta
+    from mobile_app.api.appointment_calendar import get_calendar
+
+    today = getdate()
+    appointments = get_calendar(today, today + timedelta(days=1))["appointments"]
+    # The calendar applies appointment permissions, effective workflow status and
+    # branch assignment, and resolves linked mobile bookings to their encounter.
+    patients = {
+        row["patient"] for row in appointments
+        if row["source_doctype"] == "Patient Encounter" and row.get("patient")
+        and row["status"] == "Approved" and not row["online"] and row["clinic"] == clinic
+    }
+    if not patients:
+        return []
     return _sql("""SELECT name, patient_name, mobile FROM `tabPatient`
-        WHERE name LIKE %(q)s OR patient_name LIKE %(q)s OR mobile LIKE %(q)s
-        ORDER BY modified DESC LIMIT %(start)s, %(length)s""",
-        {'q': '%' + (txt or '') + '%', 'start': max(0,cint(start)), 'length': min(30,max(1,cint(page_len)))})
+        WHERE name IN %(patients)s
+          AND (name LIKE %(q)s OR patient_name LIKE %(q)s OR mobile LIKE %(q)s)
+        ORDER BY patient_name, name LIMIT %(start)s, %(length)s""",
+        {'patients': tuple(patients), 'q': '%' + (txt or '') + '%',
+         'start': max(0,cint(start)), 'length': min(30,max(1,cint(page_len)))})
 
 
 @frappe.whitelist(methods=['POST'])
@@ -564,6 +598,8 @@ def check_in(clinic, request_id, department, doctor, patient=None, patient_detai
         previous = frappe.flags.opd_checkin; frappe.flags.opd_checkin = True
         try: cal.update_appointment(source.doctype, source.name, 'check_in', 'Approved', reason=reason)
         finally: frappe.flags.opd_checkin = previous
+    from mobile_app.token_notifications import queue_token
+    queue_token(visit)
     return _visit_data(visit)
 
 

@@ -1,0 +1,117 @@
+{
+  "doctype": "DocType",
+  "name": "OPD Token Notification",
+  "module": "MobileApp",
+  "autoname": "field:visit",
+  "field_order": [
+    "visit",
+    "clinic",
+    "patient",
+    "status",
+    "channel",
+    "template_name",
+    "language",
+    "payload",
+    "attempts",
+    "retryable",
+    "next_attempt",
+    "last_error",
+    "chat_message",
+    "provider_message_id"
+  ],
+  "fields": [
+    {
+      "fieldname": "visit",
+      "label": "Visit",
+      "fieldtype": "Data",
+      "read_only": 1
+    },
+    {
+      "fieldname": "clinic",
+      "label": "Clinic",
+      "fieldtype": "Data",
+      "read_only": 1
+    },
+    {
+      "fieldname": "patient",
+      "label": "Patient",
+      "fieldtype": "Link",
+      "read_only": 1,
+      "options": "Patient"
+    },
+    {
+      "fieldname": "status",
+      "label": "Status",
+      "fieldtype": "Select",
+      "read_only": 1,
+      "options": "Queued\nSending\nSent\nDelivered\nRead\nFailed\nUnknown\nSkipped"
+    },
+    {
+      "fieldname": "channel",
+      "label": "Channel",
+      "fieldtype": "Data",
+      "read_only": 1
+    },
+    {
+      "fieldname": "template_name",
+      "label": "Template Name",
+      "fieldtype": "Data",
+      "read_only": 1
+    },
+    {
+      "fieldname": "language",
+      "label": "Language",
+      "fieldtype": "Data",
+      "read_only": 1
+    },
+    {
+      "fieldname": "payload",
+      "label": "Payload",
+      "fieldtype": "Long Text",
+      "read_only": 1
+    },
+    {
+      "fieldname": "attempts",
+      "label": "Attempts",
+      "fieldtype": "Int",
+      "read_only": 1
+    },
+    {
+      "fieldname": "retryable",
+      "label": "Retryable",
+      "fieldtype": "Check",
+      "read_only": 1
+    },
+    {
+      "fieldname": "next_attempt",
+      "label": "Next Attempt",
+      "fieldtype": "Datetime",
+      "read_only": 1
+    },
+    {
+      "fieldname": "last_error",
+      "label": "Last Error",
+      "fieldtype": "Small Text",
+      "read_only": 1
+    },
+    {
+      "fieldname": "chat_message",
+      "label": "Chat Message",
+      "fieldtype": "Data",
+      "read_only": 1
+    },
+    {
+      "fieldname": "provider_message_id",
+      "label": "Provider Message Id",
+      "fieldtype": "Data",
+      "read_only": 1
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1
+    }
+  ],
+  "track_changes": 1
+}

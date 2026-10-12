@@ -29,14 +29,30 @@ frappe.provide('mobile_app');
     function receipt(visit, rooms) {
         const content = `<div class="opd-slip"><h3>OPD Visit Token</h3><p>${esc(visit.clinic_name||'')}</p><div class="token">${esc(visit.token)}</div>
             <h4>${esc(visit.patient_name)}</h4><p>${esc(visit.visit_date)} &middot; ${esc(visit.department)}</p>
-            <p>Doctor: ${esc(visit.consultation_doctor_name || visit.consultation_doctor)}</p><div class="opd-route">${visit.stages.map(s => `<span>${esc(s.stage)}<br><strong>${esc(roomLabel(rooms,s.room))}</strong></span>`).join(' &rarr; ')}</div></div>`;
+            <p>Doctor: ${esc(visit.consultation_doctor_name || visit.consultation_doctor)}</p><div class="opd-route">${visit.stages.map(s => `<span>${esc(s.stage)}<br><strong>${esc(roomLabel(rooms,s.room))}</strong></span>`).join('<b class="opd-route-separator" aria-hidden="true">&gt;</b>')}</div></div>`;
         const d = new frappe.ui.Dialog({title:'Token issued',fields:[{fieldname:'slip',fieldtype:'HTML'}],primary_action_label:'Print token',primary_action:()=>{
             const win=window.open('','_blank','width=600,height=700');
             if (!win) {frappe.msgprint('Allow pop-ups to print the token.');return;}
-            win.document.write(`<html><head><title>OPD Token ${esc(visit.token)}</title><style>body{font-family:sans-serif;text-align:center;padding:24px}.token{font-size:72px;font-weight:bold}.opd-route span{display:block;margin:18px}</style></head><body>${content}</body></html>`);
+            win.document.write(`<html><head><title>OPD Token ${esc(visit.token)}</title><style>body{font-family:sans-serif;text-align:center;padding:24px}.token{font-size:72px;font-weight:bold}.opd-route{display:flex;align-items:stretch;justify-content:center;gap:8px}.opd-route>span{flex:1 1 0;min-width:0;min-height:76px;display:flex;flex-direction:column;justify-content:center;padding:12px 8px;overflow-wrap:anywhere}.opd-route>span br{display:none}.opd-route-separator{align-self:center}.opd-route-separator{font-size:24px;font-weight:800;line-height:1;flex-shrink:0}</style></head><body>${content}</body></html>`);
             win.document.close();win.focus();win.print();
         }});
-        d.fields_dict.slip.$wrapper.html(content);d.show();
+        d.fields_dict.slip.$wrapper.html(content);
+        const $delivery=$('<div class="opd-token-delivery" role="status"></div>').appendTo(d.fields_dict.slip.$wrapper);
+        let deliveryTimer;
+        const updateDelivery=async()=>{
+            try{
+                const result=await frappe.xcall('mobile_app.token_notifications.status',{clinic:visit.clinic,visit:visit.name});
+                const tone=['Sent','Delivered','Read'].includes(result.status)?'success':['Queued','Sending'].includes(result.status)?'pending':'error';
+                $delivery.empty();
+                $('<span class="opd-delivery-tag"></span>').addClass(`opd-delivery-${tone}`)
+                    .text(`WhatsApp: ${result.status==='Queued'?'Sending shortly':result.status}${result.detail?' - '+result.detail:''}`).appendTo($delivery);
+                if(result.can_retry)$('<button class="btn btn-xs btn-default">Retry notification</button>').appendTo($delivery).on('click',async()=>{
+                    await frappe.xcall('mobile_app.token_notifications.retry',{clinic:visit.clinic,visit:visit.name});updateDelivery();
+                });
+            }catch(error){$delivery.empty().append($('<span class="opd-delivery-tag opd-delivery-error"></span>').text('WhatsApp status unavailable.'));}
+        };
+        d.onhide=()=>clearInterval(deliveryTimer);
+        d.show();updateDelivery();deliveryTimer=setInterval(updateDelivery,5000);
     }
 
     async function checkin(clinic, source, done) {
@@ -45,7 +61,7 @@ frappe.provide('mobile_app');
         const context=source ? await read('checkin_context',{clinic,doctype:source.source_doctype,name:source.name}) : {};
         if(context.visit){receipt(await read('get_visit',{clinic,visit:context.visit}),setup.rooms);return;}
         const fields=[
-            {fieldname:'department',label:'Confirm department',fieldtype:'Select',options:['',...setup.routes.map(r=>r.department)],default:context.department,reqd:1},
+            {fieldname:'department',label:'Confirm department',fieldtype:'Select',options:['',...setup.routes.map(r=>r.department)],default:context.department,description:'Filled from the selected appointment when available.'},
             {fieldname:'doctor',label:'Consultation doctor',fieldtype:'Select',options:[{value:'',label:''},...opts(setup.practitioners.map(p=>({value:p.name,label:p.practitioner_name})))],hidden:!source,default:context.doctor,reqd:!!source},
             {fieldname:'route',fieldtype:'HTML'},
             {fieldname:'patient',label:'Existing patient',fieldtype:'Link',options:'Patient',default:context.patient,
@@ -59,7 +75,17 @@ frappe.provide('mobile_app');
         let busy=false;
         const d=new frappe.ui.Dialog({title:(source?'Check in & issue OPD token':'Walk-in check-in')+' - '+setup.clinic_name,fields,primary_action_label:'Issue token',primary_action:async values=>{
             if(busy)return;
-            if(!source){
+            let bookingSource=source;
+            if(!bookingSource && values.patient && !values.new_patient){
+                const selected=await read('patient_checkin_context',{clinic,patient:values.patient});
+                bookingSource=selected.appointment;
+                context.doctor=selected.doctor;
+                values.doctor=selected.doctor;
+                values.department ||= selected.department;
+                if(values.department)await d.set_value('department',values.department);
+            }
+            if(!values.department){frappe.msgprint('This appointment has no department configured. Choose its department to determine the OPD rooms.');return;}
+            if(!bookingSource){
                 const route=setup.routes.find(r=>r.department===values.department);
                 const room=setup.rooms.find(r=>r.name===route?.consultation_room);
                 const assigned=[...new Set((room?.assignments||[]).map(a=>a.practitioner).filter(Boolean))];
@@ -67,12 +93,12 @@ frappe.provide('mobile_app');
                 values.doctor=assigned[0];
             }
             if(!values.patient && !values.new_patient){frappe.msgprint('Select an existing patient or register a new patient.');return;}
-            if(source && context.doctor!==values.doctor && !values.reason?.trim()){frappe.msgprint('Enter a reason for changing the booked doctor.');return;}
+            if(bookingSource && context.doctor!==values.doctor && !values.reason?.trim()){frappe.msgprint('Enter a reason for changing the booked doctor.');return;}
             busy=true;d.disable_primary_action();
             try{
                 const visit=await write('check_in',{clinic,department:values.department,doctor:values.doctor,
                     patient:values.new_patient?null:values.patient,patient_details:values.new_patient?{first_name:values.first_name,sex:values.sex,mobile:values.mobile}:null,
-                    source_doctype:source?.source_doctype,source_name:source?.name,expected_status:source?.status || 'Approved',reason:values.reason});
+                    source_doctype:bookingSource?.source_doctype,source_name:bookingSource?.name,expected_status:bookingSource?.status || 'Approved',reason:values.reason});
                 d.hide();receipt(visit,setup.rooms);done?.();
             }finally{busy=false;d.enable_primary_action();}
         }});
@@ -80,8 +106,14 @@ frappe.provide('mobile_app');
             const route=setup.routes.find(r=>r.department===d.get_value('department'));
             const room=route && setup.rooms.find(r=>r.name===route.consultation_room);
             const assigned=(room?.assignments||[]).map(a=>a.practitioner).filter(Boolean);
-            const mismatch=source && route && d.get_value('doctor') && !assigned.includes(d.get_value('doctor'));
-            d.fields_dict.route.$wrapper.html(route?`<div class="opd-notice">${(route.steps||roomFields.map((f,i)=>({stage:stages[i],room:route[f]}))).map(step=>`${esc(step.stage)}: <b>${esc(roomLabel(setup.rooms,step.room))}</b>`).join(' &rarr; ')}${source?`<br>Consultation doctors: ${assigned.map(id=>esc(setup.practitioners.find(p=>p.name===id)?.practitioner_name||id)).join(', ')}`:''}${mismatch?'<p class="opd-error">The selected doctor is not assigned to this consultation room. Choose an assigned doctor or update OPD Setup.</p>':''}</div>`:'');
+            d.fields_dict.route.$wrapper.html(route?`<div class="opd-notice">${(route.steps||roomFields.map((f,i)=>({stage:stages[i],room:route[f]}))).map(step=>`${esc(step.stage)}: <b>${esc(roomLabel(setup.rooms,step.room))}</b>`).join(' &rarr; ')}${source?`<br>Consultation doctors: ${assigned.map(id=>esc(setup.practitioners.find(p=>p.name===id)?.practitioner_name||id)).join(', ')}`:''}</div>`:'');
+        };
+        d.fields_dict.patient.df.onchange=async()=>{
+            const patient=d.get_value('patient');
+            if(source || !patient || d.get_value('new_patient'))return;
+            const selected=await read('patient_checkin_context',{clinic,patient});
+            if(d.get_value('patient')!==patient)return;
+            await d.set_value('department',selected.department || '');
         };
         d.fields_dict.department.df.onchange=showRoute;d.fields_dict.doctor.df.onchange=showRoute;d.show();showRoute();
     }
@@ -99,6 +131,7 @@ frappe.provide('mobile_app');
             this.host=host;
             this.wrapper=wrapper;this.display=display;this.visible=false;this.section='queue';this.serial=0;
             this.page=host ? host.page : frappe.ui.make_app_page({parent:wrapper,title:display?'Waiting Room':'OPD',single_column:true});
+            if(display)$(wrapper).addClass('opd-display-page');
             this.$root=$(`<div class="opd-root ${display?'opd-tv':''}"></div>`).appendTo(host ? $(wrapper) : this.page.main);
             this.changed=event=>{if(event.clinic===this.clinic && this.visible){if(this.busy)this.refreshPending=true;else if(this.section!=='setup')this.refresh();else this.$root.find('.opd-connection').text('Live - setup changes may require refresh');}};
             this.connected=()=>{this.baseline=null;this.connection(true);if(this.visible && this.section!=='setup')this.refresh();};
@@ -146,11 +179,14 @@ frappe.provide('mobile_app');
             }catch(error){this.$root.html('<div class="opd-empty">Unable to load OPD. Check your connection and clinic access, then reload.</div>');}
         }
         hide(){clearInterval(this.pollTimer);this.pollTimer=null;window.removeEventListener('resize',this.fitDisplay);document.removeEventListener('fullscreenchange',this.fitDisplay);this.visible=false;++this.serial;frappe.realtime.off('opd_queue_changed',this.changed);frappe.realtime.socket?.off('connect',this.connected);frappe.realtime.socket?.off('disconnect',this.disconnected);document.removeEventListener('visibilitychange',this.focus);}
-        connection(live){this.$root.find('.opd-connection').toggleClass('live',live).text(live?'Connected':'Disconnected - displayed information may be outdated');}
+        connection(live){
+            const polling=this.display && this.lastRefresh && Date.now()-this.lastRefresh<15000;
+            this.$root.find('.opd-connection').toggleClass('live',!!(live||polling)).text(live?(this.display?'Live Sync Active':'Connected'):polling?'Auto-refresh active (5 seconds)':'Disconnected - displayed information may be outdated');
+        }
         shell(){
             const title=this.display?'Please wait for your token to be called':'OPD Patient Flow';
             this.$root.html(`<header class="opd-head"><div><h1>${title}</h1><p>${esc(this.boot.clinics.find(c=>c.name===this.clinic)?.clinic_name)}</p><label>Branch <select data-opd-branch aria-label="OPD branch">${this.boot.clinics.map(c=>`<option value="${esc(c.name)}" ${c.name===this.clinic?'selected':''}>${esc(c.clinic_name)}</option>`).join('')}</select></label></div><div class="opd-actions"><span class="opd-connection"></span>${this.display?btn('sound','Enable sound')+btn('fullscreen','Full screen'):(this.host?.opdOnly?'':btn('calendar','Appointment calendar'))}${btn('refresh','Refresh')}</div></header>
-                ${this.display?'':`<nav class="opd-nav">${btn('queue','OPD Queue')}${btn('room','My OPD')}${this.boot.manager?btn('setup','OPD Setup'):''}${btn('tv','Waiting-Room Display')}<details class="opd-branch-menu"><summary class="opd-btn">Branch <span aria-hidden="true">&#9662;</span></summary><div class="opd-branch-menu-items">${this.boot.branch_admin?btn('add-branch','Add branch')+btn('manage-branches','Manage branches')+btn('edit-branch','Branch settings'):''}${btn('branch-summary','Branch summary')}</div></details></nav>`}<div class="opd-content"><div class="opd-empty">Loading...</div></div>`);
+                ${this.display?'':`<nav class="opd-nav">${btn('queue','OPD Queue')}${btn('room','My OPD')}${this.boot.manager?btn('setup','OPD Setup'):''}${btn('tv','Waiting-Room Display')}<details class="opd-branch-menu"><summary class="opd-btn">Branch <span aria-hidden="true">&#9662;</span></summary><div class="opd-branch-menu-items">${this.boot.branch_admin?btn('add-branch','Add branch')+btn('manage-branches','Manage branches')+btn('edit-branch','Branch settings'):''}${this.boot.branch_admin?btn('token-whatsapp','Token WhatsApp'):''}${btn('branch-summary','Branch summary')}</div></details></nav>`}<div class="opd-content"><div class="opd-empty">Loading...</div></div>`);
             this.$root.find(`[data-opd="${this.section}"]`).addClass('active');this.connection(!!frappe.realtime.socket?.connected);
         }
         async refresh(){
@@ -168,8 +204,9 @@ frappe.provide('mobile_app');
                 if(serial!==this.serial||!this.visible)return;
                 if(data.rooms)data.rooms.sort((a,b)=>String(a.room_number).localeCompare(String(b.room_number),undefined,{numeric:true}));
                 this.data=data;
+                this.lastRefresh=Date.now();this.connection(!!frappe.realtime.socket?.connected);
                 if(this.display)this.renderTV();else if(this.section==='setup'){this.setup=structuredClone(data);this.dirty=false;this.renderSetup();}else if(this.section==='room')this.renderRoom();else this.renderQueue();
-            }catch(e){if(serial===this.serial)this.$root.find('.opd-content').prepend('<div class="opd-notice">Refresh failed. The information below may be outdated. Use Refresh to try again.</div>');}
+            }catch(e){this.lastRefresh=null;this.connection(false);if(serial===this.serial)this.$root.find('.opd-content').prepend('<div class="opd-notice">Refresh failed. The information below may be outdated. Use Refresh to try again.</div>');}
             finally{this.refreshing=false;}
         }
         async mutate(method,args){
@@ -458,6 +495,21 @@ frappe.provide('mobile_app');
                     d.show();return;
                 }
                 if(action==='refresh'){await this.refresh();return;}
+                if(action==='token-whatsapp'){
+                    const api='mobile_app.token_notifications';
+                    const current=await frappe.xcall(`${api}.settings`,{clinic:this.clinic});
+                    const dialog=new frappe.ui.Dialog({title:'Token WhatsApp',fields:[
+                        {fieldname:'notice',fieldtype:'HTML',options:current.site_enabled?'':'<p>Sending is disabled on this site. Configure the channel here; an administrator must enable sending separately.</p>'},
+                        {fieldname:'enabled',label:'Enable token notifications for this branch',fieldtype:'Check',default:current.enabled||0},
+                        {fieldname:'channel',label:'Interakt sending channel',fieldtype:'Link',options:'Chat Channel Account',default:current.channel,get_query:()=>({filters:{channel_type:'Interakt',is_active:1}})},
+                        {fieldname:'template_name',label:'Approved template name',fieldtype:'Data',default:current.template_name||'opd_visit_confirmation',description:'Body variables: patient name, token number, appointment details (date, time, doctor and rooms).'},
+                        {fieldname:'language',label:'Template language code',fieldtype:'Data',default:current.language||'en'}
+                    ],primary_action_label:'Save',primary_action:async values=>{
+                        dialog.disable_primary_action();
+                        try{await frappe.xcall(`${api}.save_settings`,{clinic:this.clinic,...values});dialog.hide();frappe.show_alert('Token WhatsApp settings saved');}
+                        finally{dialog.enable_primary_action();}
+                    }});dialog.show();return;
+                }
                 if(action==='sound'){this.audio ||= new (window.AudioContext||window.webkitAudioContext)();await this.audio.resume();button.text('Sound enabled');return;}
                 if(action==='fullscreen'){await this.$root[0].requestFullscreen();return;}
                 if(action==='walkin'){await checkin(this.clinic,null,()=>this.refresh());return;}
