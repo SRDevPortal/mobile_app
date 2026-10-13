@@ -40,8 +40,8 @@ class TestDoctorDirectory(unittest.TestCase):
         self.assertEqual(result["experience_years"], 12.5)
         self.assertEqual(result["doctor_rating"], 4.8)
         self.doctor.reload()
-        self.assertEqual(frappe.db.get_value("Doctor Directory Settings", self.doctor.name, "custom_online_consulting_charge"), 299)
-        self.assertNotEqual(self.doctor.op_consulting_charge, 499)
+        self.assertEqual(self.doctor.custom_online_consulting_charge, 299)
+        self.assertEqual(self.doctor.op_consulting_charge, 499)
         with self.assertRaises(frappe.TimestampMismatchError):
             api.set_profile_metrics(self.doctor.name, modified, 1, 1, 1, 1)
         result = api.set_profile_metrics(self.doctor.name, result["modified"], 0, 0, 0, 0, metrics_modified=result["metrics_modified"])
@@ -349,14 +349,39 @@ class TestDoctorDirectory(unittest.TestCase):
             self.assertEqual(result["accepts_opd_appointments"], bool(opd))
             self.assertEqual(result["accepts_online_appointments"], bool(online))
 
-    def test_enabling_without_saved_price_is_rejected(self):
+    def test_enabling_uses_practitioner_prices_without_directory_settings(self):
         frappe.db.delete("Doctor Directory Settings", {"name": self.doctor.name})
-        modified = self.details()["doctor"]["modified"]
-        for opd, online in [(1, 0), (0, 1), (1, 1)]:
-            with self.assertRaisesRegex(frappe.ValidationError, "price is required"):
-                api.set_appointment_modes(self.doctor.name, modified, opd, online)
-        with self.assertRaisesRegex(frappe.ValidationError, "price is required"):
-            api.set_online_appointments(self.doctor.name, modified, 1)
+        self.doctor.op_consulting_charge = 0
+        self.doctor.custom_online_consulting_charge = 20
+        self.doctor.save()
+        api.set_appointment_modes(self.doctor.name, str(self.doctor.modified), 1, 1)
+        self.assertEqual(self.details()["doctor"]["online_consulting_charge"], 20)
+        self.assertEqual(self.details()["doctor"]["op_consulting_charge"], 0)
+
+    def test_prices_follow_practitioner_edits_and_ignore_legacy_directory_prices(self):
+        initial = self.details()["doctor"]
+        api.set_profile_metrics(self.doctor.name, initial["modified"], 100, 5, 1, 4,
+                                metrics_modified=initial["metrics_modified"])
+        frappe.db.set_value("Doctor Directory Settings", self.doctor.name,
+                            {"op_consulting_charge": 999, "custom_online_consulting_charge": 999})
+        before = self.details()["doctor"]
+        self.doctor.reload()
+        self.doctor.op_consulting_charge = 150
+        self.doctor.custom_online_consulting_charge = 20
+        self.doctor.save()
+        current = self.details()["doctor"]
+        self.assertEqual(current["online_consulting_charge"], 20)
+        self.assertEqual(current["op_consulting_charge"], 150)
+        with self.assertRaises(frappe.TimestampMismatchError):
+            api.set_profile_metrics(self.doctor.name, before["modified"], 1, 1, 1, 1,
+                                    metrics_modified=before["metrics_modified"])
+        with self.assertRaises(frappe.TimestampMismatchError):
+            api.set_appointment_modes(self.doctor.name, before["modified"], 1, 1, 1, 1)
+        api.set_appointment_modes(self.doctor.name, current["modified"], 1, 1, 200, 30)
+        self.doctor.reload()
+        self.assertEqual(self.doctor.op_consulting_charge, 200)
+        self.assertEqual(self.doctor.custom_online_consulting_charge, 30)
+        self.assertEqual(self.details()["doctor"]["online_consulting_charge"], 30)
 
     def test_appointment_modes_save_independently_and_preserve_legacy_links(self):
         from mobile_app.api import practitioners
@@ -418,3 +443,24 @@ class TestDoctorDirectory(unittest.TestCase):
         booking.patient_name = "Updated patient name"
         booking.save()
         self.assertEqual(booking.status, "Confirmed")
+
+
+class TestSharedPriceMigration(unittest.TestCase):
+    def test_existing_practitioner_price_is_never_overwritten(self):
+        from mobile_app import practitioner_setup as setup
+        with patch.object(setup, "frappe") as f, patch.object(setup, "create_custom_fields") as create:
+            f.get_meta.return_value.has_field.return_value = True
+            setup.ensure_online_charge_field()
+            create.assert_not_called()
+            f.db.sql.assert_not_called()
+
+    def test_missing_field_is_created_and_legacy_price_is_preserved(self):
+        from mobile_app import practitioner_setup as setup
+        with patch.object(setup, "frappe") as f, patch.object(setup, "create_custom_fields") as create:
+            f.get_meta.return_value.has_field.return_value = False
+            f.db.exists.return_value = True
+            setup.ensure_online_charge_field()
+            self.assertEqual(create.call_args.args[0]["Healthcare Practitioner"][0]["fieldname"],
+                             "custom_online_consulting_charge")
+            f.db.sql.assert_called_once()
+            self.assertIn("d.custom_online_consulting_charge", f.db.sql.call_args.args[0])

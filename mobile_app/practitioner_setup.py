@@ -6,6 +6,26 @@ import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 
+def ensure_online_charge_field():
+    # Existing practitioner prices win. Only bootstrap from directory settings
+    # on sites that have never had the shared online-price field.
+    if frappe.get_meta("Healthcare Practitioner").has_field("custom_online_consulting_charge"):
+        return
+    create_custom_fields({"Healthcare Practitioner": [{
+        "fieldname": "custom_online_consulting_charge",
+        "label": "Online Consulting Charge",
+        "fieldtype": "Currency",
+        "insert_after": "op_consulting_charge",
+        "non_negative": 1,
+        "module": "MobileApp",
+    }]}, update=False)
+    if frappe.db.exists("DocType", "Doctor Directory Settings"):
+        frappe.db.sql("""UPDATE `tabHealthcare Practitioner` p
+            INNER JOIN `tabDoctor Directory Settings` d ON d.practitioner = p.name
+            SET p.custom_online_consulting_charge = d.custom_online_consulting_charge""")
+    frappe.clear_cache(doctype="Healthcare Practitioner")
+
+
 def setup_practitioner_diseases():
     if not frappe.db.exists("DocType", "Healthcare Practitioner"):
         return
@@ -41,6 +61,7 @@ def setup_practitioner_diseases():
         }]
     }, ignore_validate=True)
 
+    ensure_online_charge_field()
     frappe.reload_doc("mobileapp", "doctype", "doctor_directory_settings")
     for name in frappe.get_all("Healthcare Practitioner", pluck="name"):
         if not frappe.db.exists("Doctor Directory Settings", name):

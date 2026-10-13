@@ -46,8 +46,8 @@ def _details(doc):
             "image": doc.get("image") or "",
             "metrics_modified": str(settings.get("modified") or ""),
             "diseases": diseases, "about_doctor": doc.get("custom_about_doctor") or "",
-            "op_consulting_charge": flt(settings.get("op_consulting_charge")),
-            "online_consulting_charge": flt(settings.get("custom_online_consulting_charge")),
+            "op_consulting_charge": flt(doc.get("op_consulting_charge")),
+            "online_consulting_charge": flt(doc.get("custom_online_consulting_charge")),
             "experience_years": flt(settings.get("custom_experience_years")),
             "doctor_rating": flt(settings.get("custom_doctor_rating")),
             "inpatient_visit_charge": flt(doc.get("inpatient_visit_charge")),
@@ -87,7 +87,17 @@ def set_profile_metrics(practitioner_id, doctor_modified, op_consulting_charge,
             frappe.throw("Rating must be between 0 and 5.")
         values[field] = number
     doc = _lock_doctor(practitioner_id, doctor_modified)
+    prices = {field: values.pop(field) for field in (
+        "op_consulting_charge", "custom_online_consulting_charge")}
+    if any(not doc.meta.has_field(field) for field in prices):
+        frappe.throw("Appointment settings require the mobile_app migration.")
     _save_directory_values(doc, values, metrics_modified)
+    # Prices share the practitioner record with the standard form. Preserve
+    # unrelated imported links, but update its revision and notify open forms.
+    frappe.db.set_value(doc.doctype, doc.name, prices)
+    frappe.clear_document_cache(doc.doctype, doc.name)
+    doc.reload()
+    doc.notify_update()
     return _details(doc)
 
 
@@ -310,13 +320,12 @@ def set_appointment_modes(practitioner_id, doctor_modified, opd_enabled, online_
         "custom_accept_opd_appointments": int(opd_enabled),
         "custom_accept_online_appointments": int(online_enabled),
     }
-    existing = _directory_values(doc)
     for field, label, value, enabled in (
         ("op_consulting_charge", "OPD price", op_consulting_charge, int(opd_enabled)),
         ("custom_online_consulting_charge", "Online price", online_consulting_charge, int(online_enabled)),
     ):
         # Older callers omit prices: validate the saved price before enabling.
-        effective = existing.get(field) if value is None else value
+        effective = doc.get(field) if value is None else value
         if effective is None or (isinstance(effective, str) and not effective.strip()):
             if enabled:
                 frappe.throw(f"{label} is required when consultation is enabled.")
@@ -329,9 +338,6 @@ def set_appointment_modes(practitioner_id, doctor_modified, opd_enabled, online_
             frappe.throw(f"{label} must be a finite, non-negative number.")
         if value is not None:
             values[field] = number
-    prices = {field: values.pop(field) for field in ("op_consulting_charge", "custom_online_consulting_charge") if field in values}
-    if prices:
-        _save_directory_values(doc, prices, metrics_modified)
     if any(not doc.meta.has_field(field) for field in values):
         frappe.throw("Appointment settings require the mobile_app migration.")
     # Save both choices together without revalidating unrelated imported links.
