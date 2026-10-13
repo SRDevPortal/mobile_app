@@ -22,16 +22,34 @@ def preview_weekly(practitioner_id, weekdays, from_time, to_time, slot_minutes=3
         frappe.throw(str(error))
 
 
+def _directory_values(doc):
+    return frappe.db.get_value("Doctor Directory Settings", doc.name, "*", as_dict=True) or {}
+
+
+def _save_directory_values(doc, values, expected):
+    # The caller locks the practitioner and checks its write permission first.
+    existing = _directory_values(doc)
+    if str(existing.get("modified") or "") != str(expected or ""):
+        frappe.throw("Doctor screen settings changed. Refresh before saving again.", frappe.TimestampMismatchError)
+    if existing:
+        frappe.db.set_value("Doctor Directory Settings", doc.name, values)
+    else:
+        frappe.get_doc({"doctype": "Doctor Directory Settings", "practitioner": doc.name,
+                        **values}).insert(ignore_permissions=True)
+
+
 def _details(doc):
+    settings = _directory_values(doc)
     diseases = list(dict.fromkeys(unescape(row.disease).strip()
         for row in doc.get("sr_diseases") or [] if row.get("disease") and unescape(row.disease).strip()))
     return {"id": doc.name, "name": doc.practitioner_name or doc.name,
             "image": doc.get("image") or "",
+            "metrics_modified": str(settings.get("modified") or ""),
             "diseases": diseases, "about_doctor": doc.get("custom_about_doctor") or "",
-            "op_consulting_charge": flt(doc.get("op_consulting_charge")),
-            "online_consulting_charge": flt(doc.get("custom_online_consulting_charge")),
-            "experience_years": flt(doc.get("custom_experience_years")),
-            "doctor_rating": flt(doc.get("custom_doctor_rating")),
+            "op_consulting_charge": flt(settings.get("op_consulting_charge")),
+            "online_consulting_charge": flt(settings.get("custom_online_consulting_charge")),
+            "experience_years": flt(settings.get("custom_experience_years")),
+            "doctor_rating": flt(settings.get("custom_doctor_rating")),
             "inpatient_visit_charge": flt(doc.get("inpatient_visit_charge")),
             "accepts_online_appointments": bool(frappe.utils.cint(doc.get("custom_accept_online_appointments"))),
             "accepts_opd_appointments": bool(frappe.utils.cint(doc.get("custom_accept_opd_appointments", 1))),
@@ -51,7 +69,7 @@ def list_doctors():
 
 @frappe.whitelist(methods=["POST"])
 def set_profile_metrics(practitioner_id, doctor_modified, op_consulting_charge,
-                        online_consulting_charge, experience_years, doctor_rating):
+                        online_consulting_charge, experience_years, doctor_rating, metrics_modified=None):
     values = {}
     for field, label, value in (
         ("op_consulting_charge", "OPD price", op_consulting_charge),
@@ -69,13 +87,7 @@ def set_profile_metrics(practitioner_id, doctor_modified, op_consulting_charge,
             frappe.throw("Rating must be between 0 and 5.")
         values[field] = number
     doc = _lock_doctor(practitioner_id, doctor_modified)
-    if any(not doc.meta.has_field(field) for field in values):
-        frappe.throw("Doctor profile settings require the mobile_app migration.")
-    # Update only these validated fields, preserving unrelated imported links.
-    frappe.db.set_value(doc.doctype, doc.name, values)
-    frappe.clear_document_cache(doc.doctype, doc.name)
-    doc.reload()
-    doc.notify_update()
+    _save_directory_values(doc, values, metrics_modified)
     return _details(doc)
 
 
@@ -290,7 +302,7 @@ def save_leave_range(practitioner_id, doctor_modified, start_date, end_date, exp
 
 @frappe.whitelist(methods=["POST"])
 def set_appointment_modes(practitioner_id, doctor_modified, opd_enabled, online_enabled,
-                          op_consulting_charge=None, online_consulting_charge=None):
+                          op_consulting_charge=None, online_consulting_charge=None, metrics_modified=None):
     if any(str(value) not in {"0", "1"} for value in (opd_enabled, online_enabled)):
         frappe.throw("Choose enabled or disabled for OPD and online appointments.")
     doc = _lock_doctor(practitioner_id, doctor_modified)
@@ -311,6 +323,9 @@ def set_appointment_modes(practitioner_id, doctor_modified, opd_enabled, online_
         if not isfinite(number) or number < 0:
             frappe.throw(f"{label} must be a finite, non-negative number.")
         values[field] = number
+    prices = {field: values.pop(field) for field in ("op_consulting_charge", "custom_online_consulting_charge") if field in values}
+    if prices:
+        _save_directory_values(doc, prices, metrics_modified)
     if any(not doc.meta.has_field(field) for field in values):
         frappe.throw("Appointment settings require the mobile_app migration.")
     # Save both choices together without revalidating unrelated imported links.

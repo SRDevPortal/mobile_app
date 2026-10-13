@@ -37,10 +37,11 @@ class TestDoctorDirectory(unittest.TestCase):
         self.assertEqual(result["experience_years"], 12.5)
         self.assertEqual(result["doctor_rating"], 4.8)
         self.doctor.reload()
-        self.assertEqual(self.doctor.custom_online_consulting_charge, 299)
+        self.assertEqual(frappe.db.get_value("Doctor Directory Settings", self.doctor.name, "custom_online_consulting_charge"), 299)
+        self.assertNotEqual(self.doctor.op_consulting_charge, 499)
         with self.assertRaises(frappe.TimestampMismatchError):
             api.set_profile_metrics(self.doctor.name, modified, 1, 1, 1, 1)
-        result = api.set_profile_metrics(self.doctor.name, result["modified"], 0, 0, 0, 0)
+        result = api.set_profile_metrics(self.doctor.name, result["modified"], 0, 0, 0, 0, metrics_modified=result["metrics_modified"])
         self.assertEqual(result["doctor_rating"], 0)
 
     def test_profile_metrics_validate_numbers(self):

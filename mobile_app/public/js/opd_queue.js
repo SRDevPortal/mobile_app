@@ -163,9 +163,6 @@ frappe.provide('mobile_app');
         async show(){
             if(!this.visible){frappe.realtime.on('opd_queue_changed',this.changed);frappe.realtime.socket?.on('connect',this.connected);frappe.realtime.socket?.on('disconnect',this.disconnected);document.addEventListener('visibilitychange',this.focus);}
             this.visible=true;this.baseline=null;
-            if(this.display&&!this.pollTimer)this.pollTimer=setInterval(()=>{
-                if(this.visible&&!document.hidden&&!this.busy&&!this.refreshing)this.refresh();
-            },5000);
             if(this.display){window.addEventListener('resize',this.fitDisplay);document.addEventListener('fullscreenchange',this.fitDisplay);requestAnimationFrame(this.fitDisplay);}
             try{
                 this.boot=await read('bootstrap',{room:this.selectedRoom||null});
@@ -178,10 +175,9 @@ frappe.provide('mobile_app');
                 this.shell();await this.refresh();
             }catch(error){this.$root.html('<div class="opd-empty">Unable to load OPD. Check your connection and clinic access, then reload.</div>');}
         }
-        hide(){clearInterval(this.pollTimer);this.pollTimer=null;window.removeEventListener('resize',this.fitDisplay);document.removeEventListener('fullscreenchange',this.fitDisplay);this.visible=false;++this.serial;frappe.realtime.off('opd_queue_changed',this.changed);frappe.realtime.socket?.off('connect',this.connected);frappe.realtime.socket?.off('disconnect',this.disconnected);document.removeEventListener('visibilitychange',this.focus);}
+        hide(){window.removeEventListener('resize',this.fitDisplay);document.removeEventListener('fullscreenchange',this.fitDisplay);this.visible=false;++this.serial;frappe.realtime.off('opd_queue_changed',this.changed);frappe.realtime.socket?.off('connect',this.connected);frappe.realtime.socket?.off('disconnect',this.disconnected);document.removeEventListener('visibilitychange',this.focus);}
         connection(live){
-            const polling=this.display && this.lastRefresh && Date.now()-this.lastRefresh<15000;
-            this.$root.find('.opd-connection').toggleClass('live',!!(live||polling)).text(live?(this.display?'Live Sync Active':'Connected'):polling?'Auto-refresh active (5 seconds)':'Disconnected - displayed information may be outdated');
+            this.$root.find('.opd-connection').toggleClass('live',!!live).text(live?(this.display?'Live updates on activity':'Connected'):'Disconnected - displayed information may be outdated');
         }
         shell(){
             const title=this.display?'Please wait for your token to be called':'OPD Patient Flow';
@@ -197,7 +193,7 @@ frappe.provide('mobile_app');
             try{
                 let data;
                 if(this.display){
-                    // Display polling handles errors inline, without repeated Desk dialogs.
+                    // Display updates handle errors inline, without repeated Desk dialogs.
                     const response=await fetch(`/api/method/${API}.display_snapshot`,{
                         method:'POST',credentials:'same-origin',
                         headers:{'Content-Type':'application/json','X-Frappe-CSRF-Token':frappe.csrf_token},
@@ -228,7 +224,6 @@ frappe.provide('mobile_app');
                     const $content=this.$root.find('.opd-content');
                     $content.find('.opd-refresh-error').remove();
                     if(this.display && e.sessionExpired){
-                        clearInterval(this.pollTimer);this.pollTimer=null;
                         const login='/login?redirect-to='+encodeURIComponent(location.pathname+location.search);
                         $content.prepend(`<div class="opd-notice opd-refresh-error" role="alert">Session expired or access unavailable. <a href="${esc(login)}">Sign in again</a> to resume the display. The tokens below may be outdated.</div>`);
                     }else $content.prepend('<div class="opd-notice opd-refresh-error" role="alert">Refresh failed. The information below may be outdated. Use Refresh to try again.</div>');

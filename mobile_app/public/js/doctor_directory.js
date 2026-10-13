@@ -333,6 +333,7 @@ frappe.provide("mobile_app");
                     try {
                         const result = await frappe.xcall(`${API}.set_profile_metrics`, {
                             practitioner_id: doctor.id, doctor_modified: doctor.modified,
+                            metrics_modified: doctor.metrics_modified,
                             op_consulting_charge: doctor.op_consulting_charge, online_consulting_charge: doctor.online_consulting_charge,
                             ...Object.fromEntries(fields.map(field => [field, values[field]]))
                         });
@@ -409,7 +410,8 @@ frappe.provide("mobile_app");
                 await frappe.xcall(`${API}.set_appointment_modes`, {
                     practitioner_id: this.selected, doctor_modified: this.data.doctor.modified,
                     opd_enabled: opdEnabled ? 1 : 0, online_enabled: onlineEnabled ? 1 : 0,
-                    op_consulting_charge: opdPrice, online_consulting_charge: onlinePrice
+                    op_consulting_charge: opdPrice, online_consulting_charge: onlinePrice,
+                    metrics_modified: this.data.doctor.metrics_modified
                 });
                 await this.load();
                 frappe.show_alert({message: 'Appointment settings saved', indicator: 'green'});

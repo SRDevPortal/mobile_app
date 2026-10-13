@@ -1,0 +1,50 @@
+{
+  "doctype": "DocType",
+  "name": "Doctor Directory Settings",
+  "module": "MobileApp",
+  "engine": "InnoDB",
+  "autoname": "field:practitioner",
+  "fields": [
+    {
+      "fieldname": "practitioner",
+      "label": "Doctor",
+      "fieldtype": "Link",
+      "options": "Healthcare Practitioner",
+      "reqd": 1,
+      "unique": 1
+    },
+    {
+      "fieldname": "op_consulting_charge",
+      "label": "OPD Charge",
+      "fieldtype": "Currency",
+      "non_negative": 1
+    },
+    {
+      "fieldname": "custom_online_consulting_charge",
+      "label": "Online Charge",
+      "fieldtype": "Currency",
+      "non_negative": 1
+    },
+    {
+      "fieldname": "custom_experience_years",
+      "label": "Experience (years)",
+      "fieldtype": "Float",
+      "non_negative": 1
+    },
+    {
+      "fieldname": "custom_doctor_rating",
+      "label": "Rating (0?5)",
+      "fieldtype": "Float",
+      "non_negative": 1
+    }
+  ],
+  "field_order": [
+    "practitioner",
+    "op_consulting_charge",
+    "custom_online_consulting_charge",
+    "custom_experience_years",
+    "custom_doctor_rating"
+  ],
+  "permissions": [],
+  "track_changes": 1
+}
