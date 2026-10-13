@@ -27,10 +27,14 @@ frappe.provide("mobile_app");
             root.html(`<header class="ac-topbar"><div><h1>Doctors</h1><span class="ac-subtitle">Doctor details and availability</span></div>
                 <button class="ac-btn" data-dd="refresh">Refresh doctors</button></header>
                 <div class="dd-body"><aside class="dd-sidebar"><label for="dd-search">Find a doctor</label>
-                    <input id="dd-search" class="ac-search" type="search" placeholder="Name, disease or phone"><div class="dd-list" aria-label="Doctors"></div></aside>
+                    <input id="dd-search" class="ac-search" type="search" placeholder="Name, disease or phone">
+                    <label for="dd-disease" class="dd-disease-label">Filter by disease</label>
+                    <select id="dd-disease" class="ac-search"><option value="">All diseases</option></select>
+                    <div class="dd-list" aria-label="Doctors"></div></aside>
                 <section class="dd-content" aria-label="Doctor details"><p class="dd-message" role="status">Select a doctor to view availability.</p>
                     <div class="dd-detail" hidden></div></section></div>`);
             root.on("input", "#dd-search", () => this.renderList());
+            root.on("change", "#dd-disease", () => this.renderList());
             root.on("click", "[data-practitioner]", e => this.leaveDraft(() => {
                 this.selected = $(e.currentTarget).attr("data-practitioner"); this.scheduleId = null; this.leaveStart = null; this.leaveEnd = null; this.load();
             }));
@@ -66,15 +70,27 @@ frappe.provide("mobile_app");
                 const data = await frappe.xcall(`${API}.list_doctors`);
                 if (serial !== this.serial) return;
                 this.doctors = data.doctors;
+                this.renderDiseaseFilter();
                 if (!this.doctors.some(d => d.id === this.selected)) this.selected = this.doctors[0]?.id;
                 this.renderList();
                 if (this.selected) await this.load();
                 else {this.$root.find(".dd-detail").prop("hidden", true); this.$root.find(".dd-message").text("No doctors are available to your account.");}
             } catch (e) {if (serial === this.serial) this.$root.find(".dd-message").text("Could not load doctors. Check your connection and access, then refresh.");}
         }
+        renderDiseaseFilter() {
+            const $filter = this.$root.find("#dd-disease");
+            const selected = $filter.val();
+            const diseases = [...new Set(this.doctors.flatMap(d => d.diseases || []))]
+                .filter(Boolean).sort((a, b) => a.localeCompare(b));
+            $filter.html('<option value="">All diseases</option>' + diseases.map(disease =>
+                `<option value="${esc(disease)}">${esc(disease)}</option>`).join(""));
+            $filter.val(diseases.includes(selected) ? selected : "");
+        }
         renderList() {
             const query = this.$root.find("#dd-search").val().trim().toLowerCase();
-            const doctors = this.doctors.filter(d => [d.name, ...(d.diseases || []), d.phone].join(" ").toLowerCase().includes(query));
+            const disease = this.$root.find("#dd-disease").val();
+            const doctors = this.doctors.filter(d => (!disease || (d.diseases || []).includes(disease)) &&
+                [d.name, ...(d.diseases || []), d.phone].join(" ").toLowerCase().includes(query));
             this.$root.find(".dd-list").html(doctors.length ? doctors.map(d => `<button class="dd-person ${d.id === this.selected ? "selected" : ""}" data-practitioner="${esc(d.id)}" aria-pressed="${d.id === this.selected}">
                 ${avatar(d, "dd-avatar")}
                 <span><strong>${esc(d.name)}</strong><small>${esc(d.status)}</small></span></button>`).join("") : '<p class="dd-empty">No matching doctors.</p>');

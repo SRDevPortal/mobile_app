@@ -195,7 +195,23 @@ frappe.provide('mobile_app');
             const serial=++this.serial;
             this.refreshing=true;
             try{
-                const data=await read(this.display?'display_snapshot':this.section==='setup'?'get_setup':'snapshot',{clinic:this.clinic});
+                let data;
+                if(this.display){
+                    // Display polling handles errors inline, without repeated Desk dialogs.
+                    const response=await fetch(`/api/method/${API}.display_snapshot`,{
+                        method:'POST',credentials:'same-origin',
+                        headers:{'Content-Type':'application/json','X-Frappe-CSRF-Token':frappe.csrf_token},
+                        body:JSON.stringify({clinic:this.clinic})
+                    });
+                    if(!response.ok){
+                        const error=new Error('Display refresh failed');
+                        error.sessionExpired=response.status===401||response.status===403;
+                        throw error;
+                    }
+                    const result=await response.json();
+                    if(result.exc||!result.message)throw new Error('Invalid display response');
+                    data=result.message;
+                }else data=await read(this.section==='setup'?'get_setup':'snapshot',{clinic:this.clinic});
                 if(!this.display && this.section==='queue'){
                     this.queueDate ||= frappe.datetime.get_today();
                     const daily=await read('daily_visits',{clinic:this.clinic,date:this.queueDate});
@@ -206,7 +222,18 @@ frappe.provide('mobile_app');
                 this.data=data;
                 this.lastRefresh=Date.now();this.connection(!!frappe.realtime.socket?.connected);
                 if(this.display)this.renderTV();else if(this.section==='setup'){this.setup=structuredClone(data);this.dirty=false;this.renderSetup();}else if(this.section==='room')this.renderRoom();else this.renderQueue();
-            }catch(e){this.lastRefresh=null;this.connection(false);if(serial===this.serial)this.$root.find('.opd-content').prepend('<div class="opd-notice">Refresh failed. The information below may be outdated. Use Refresh to try again.</div>');}
+            }catch(e){
+                this.lastRefresh=null;this.connection(false);
+                if(serial===this.serial){
+                    const $content=this.$root.find('.opd-content');
+                    $content.find('.opd-refresh-error').remove();
+                    if(this.display && e.sessionExpired){
+                        clearInterval(this.pollTimer);this.pollTimer=null;
+                        const login='/login?redirect-to='+encodeURIComponent(location.pathname+location.search);
+                        $content.prepend(`<div class="opd-notice opd-refresh-error" role="alert">Session expired or access unavailable. <a href="${esc(login)}">Sign in again</a> to resume the display. The tokens below may be outdated.</div>`);
+                    }else $content.prepend('<div class="opd-notice opd-refresh-error" role="alert">Refresh failed. The information below may be outdated. Use Refresh to try again.</div>');
+                }
+            }
             finally{this.refreshing=false;}
         }
         async mutate(method,args){

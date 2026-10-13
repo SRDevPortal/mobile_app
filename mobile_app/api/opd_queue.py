@@ -882,6 +882,14 @@ def display_snapshot(clinic=None):
             frappe.throw('Select an authorized clinic before loading the waiting-room display.', frappe.PermissionError)
         clinic = clinics[0]['name']
     doc=_access(clinic,display=True); calls=[]
+    # A wall display is active without keyboard/mouse input. Renew its existing,
+    # authenticated session at most once a minute; never recreate a revoked one.
+    session = getattr(frappe.local, 'session_obj', None)
+    if session and frappe.session.user != 'Guest':
+        heartbeat_key = 'opd_display_heartbeat:' + frappe.session.sid
+        if not frappe.cache.get_value(heartbeat_key, expires=True):
+            session.update(force=True)
+            frappe.cache.set_value(heartbeat_key, 1, expires_in_sec=60)
     for session in _all('Session',filters={'clinic':clinic,'status':['!=','Closed'],'current_visit':['is','set']},fields=['room','current_visit','call_sequence']):
         visit=_doc('Visit',session.current_visit); stage=visit.stages[visit.stage_index]
         if stage.state!='Called':continue

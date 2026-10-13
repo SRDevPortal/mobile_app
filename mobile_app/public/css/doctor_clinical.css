@@ -60,6 +60,7 @@ body.ma-calendar-active .container.page-body {max-width:none;padding:0}
 .dd-sidebar {width:255px;flex-shrink:0;background:var(--ac-surface);border-right:1px solid var(--ac-border);padding:18px 12px}
 .dd-sidebar > label {display:block;font-size:11px;color:var(--ac-muted);margin-bottom:8px}
 .dd-sidebar .ac-search {width:100%;background:#fff}
+.dd-sidebar > .dd-disease-label {margin-top:16px}
 .dd-list {margin:16px -12px 0;max-height:75vh;overflow:auto}
 .dd-person {display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;padding:13px 12px;text-align:left;color:var(--ac-ink);cursor:pointer}
 .dd-person:hover {background:var(--ac-tint)}
