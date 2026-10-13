@@ -141,7 +141,7 @@ def save_settings(clinic, enabled=0, channel=None, template_name=None, language=
     previous = frappe.flags.in_opd_mutation
     frappe.flags.in_opd_mutation = True
     try:
-        store.lock()
+        store.lock(clinic)
         branch = store.get("Clinic", clinic)
         branch.token_whatsapp = {"enabled": cint(enabled), "channel": channel, "template_name": template_name, "language": language}
         branch.save()

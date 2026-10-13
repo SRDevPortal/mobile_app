@@ -2,16 +2,16 @@
 
 ## Entry points and storage
 
-Open `/app/doctor-clinical` and click **OPD** in the existing navigation, alongside Calendar and Doctors. The embedded panel contains OPD Queue, My Room and manager-only OPD Setup. There is no separate OPD Queue page or OPD DocType.
+Open `/app/doctor-clinical` and click **OPD** in the existing navigation, alongside Calendar and Doctors. The embedded panel contains OPD Queue, My Room and manager-only OPD Setup. There is no separate OPD Queue page. Internal OPD state is managed by the queue API.
 
 The TV remains a fullscreen-capable custom page at `/app/opd-display`. Click Enable sound once. A custom page is not a new DocType.
 
-- Room setup, department routes, active room sessions and the daily token counter are held in a hidden configuration field on existing **Healthcare Settings**.
+- Branch setup, department routes, rooms, active sessions, appointment branch assignments and token counters live in internal **OPD State Record** rows. Healthcare Settings retains only shared metadata such as the default clinic. The internal DocType has no Desk role permissions.
 - Patient token, saved route and stage state are stored on existing **Mobile Appointment Workflow** records. Appointment check-in extends the same workflow record already used by the calendar. Walk-ins create a workflow linked to the existing Patient record.
-- Request deduplication and immutable transition audit data use existing **Version** records. No OPD tables or DocTypes are created by this release.
-- Indexed workflow fields support active-visit lookup and unique token/source protection. A locked settings row serializes queue mutations; current reads avoid stale data under MariaDB REPEATABLE READ.
+- Request deduplication and immutable transition audit data use existing **Version** records.
+- Indexed workflow fields support clinic/date and active-visit lookups and unique token/source protection. Ordinary mutations lock the affected branch row. Branch administration acquires the settings gate followed by branch rows in stable order. Current locking reads preserve transaction correctness under MariaDB REPEATABLE READ.
 
-Migration initializes Main Clinic inside the settings configuration. It does not invent room/doctor/department assignments. Configure real assignments before check-in. The initial portal chooses the first accessible clinic; multi-clinic selection is outside this release. The migration also preserves any data from the previous OPD implementation in existing records before deleting the superseded OPD DocType metadata. Old SQL tables are left as migration backups, not used by the app.
+Migration initializes the default clinic in internal state records. It does not invent room/doctor/department assignments. Configure real assignments before check-in. The portal supports switching between accessible branches. The migration also preserves any data from the previous OPD implementation in existing records before deleting the superseded OPD DocType metadata. Old SQL tables are left as migration backups, not used by the app.
 
 ## Configuration and permissions
 
@@ -37,13 +37,13 @@ Setup changes affect new check-ins. Apply to waiting patients previews affected 
 
 ## Reliability
 
-All queue mutations lock the Healthcare Settings configuration row and use current locking reads under MariaDB REPEATABLE READ. This serializes daily token allocation, session ownership and patient claiming. Unique token/source/request keys provide additional duplicate protection. Setup and record revisions reject stale edits. Successful requests write native Version audit entries, including the affected patient/stage transition and handover details; OPD configuration and workflow fields are protected against normal direct writes. Realtime invalidations publish after commit. Failed HTTP responses can be retried with the same request ID.
+Queue mutations lock their branch row and use current locking reads under MariaDB REPEATABLE READ. Token allocation, session ownership and patient claiming remain serialized within that branch. Patient-row locks and the unique session-practitioner field protect cross-branch conflicts. Routine activity in different branches does not share a configuration-row lock. Unique token/source/request keys provide additional duplicate protection. Setup and record revisions reject stale edits. Successful requests write native Version audit entries, including the affected patient/stage transition and handover details; OPD configuration and workflow fields are protected against normal direct writes. Realtime invalidations publish after commit. Failed HTTP responses can be retried with the same request ID.
 
 ## Validation completed locally
 
 - Backend integration tests: `mobile_app.tests.test_opd_queue` and `mobile_app.tests.test_appointment_calendar`.
 - Separate-process race tests: `mobile_app.tests.test_opd_concurrency.run()` (committed, uniquely named fixtures cleaned in finally; use a local/test site only).
-- Chromium: setup edit/save, room occupation, call/start/complete, TV snapshots, live call/recall, disconnect/reconnect without duplicate chimes, calendar navigation and ngrok page access.
+- Earlier UI validation (before the performance upgrade), using Chromium: setup edit/save, room occupation, call/start/complete, TV snapshots, live call/recall, disconnect/reconnect without duplicate chimes, calendar navigation and ngrok page access.
 
 Run backend tests from bench/sites with the bench Python environment:
 
@@ -94,3 +94,15 @@ Staff assignment is no longer required. Any enabled authorized OPD operator can 
 
 ### OPD access and multiple rooms (2026-10-06)
 OPD Staff and existing authorized OPD operator roles have full OPD setup, reception, and room-action access. The left-menu OPD entry uses these same roles. This supersedes the earlier manager-only setup and single-room-per-user policy. One user can operate multiple rooms, and any authorized OPD operator can act on an existing room session. Opening a room is navigation; starting a session is explicit. One session per room, optimistic version checks, patient claims, and audit attribution remain enforced. Display-only accounts remain restricted to assigned clinic snapshots; clinical form permissions remain native.
+
+## Performance upgrade and deployment
+
+Daily queues filter by indexed `opd_clinic` / `opd_visit_date` columns, aggregate queue states in SQL, and return 100 visits per page (maximum API page size 200). Search and status filters apply to the whole selected day before pagination; daily totals remain unfiltered. Earlier unfinished visits remain visible in My OPD and end-of-day review. `queue_snapshot` returns setup and a daily page together; frontend refreshes allow one in-flight request, coalesce pending updates, and defer work while the browser tab is hidden.
+
+`users_full_sync` retains owned child-row IDs using their external identity fields and persists only changed child rows. Omitted appointment payloads do not invoke appointment mirroring. Unchanged snapshots preserve parent/child/standalone modified timestamps. Profiles still require echoed owned IDs to retain their identity.
+
+Deploy this storage change in a maintenance window: back up the target site, stop traffic and old workers, deploy the complete app, run `bench --site <site> migrate`, and restart services with the new code. Do not run old and new workers together: the new migration moves mutable configuration out of Healthcare Settings. A code-only rollback is not compatible with the new storage; restore the pre-upgrade backup for rollback. Rehearse this on a production-sized staging copy first.
+
+`opd_setup.after_migrate` creates the internal state schema and visit indexes, transfers existing configuration while preserving public IDs/counters/sessions/assignments, backfills visit dates and queue states, and marks the transfer complete. Repeated migrations do not replay transferred data. The legacy OPD import remains supported. Existing visit payloads without a usable date cause an explicit migration failure rather than silently disappearing from date-filtered queues.
+
+Regression coverage includes `test_opd_performance`, `test_sync_performance`, and `test_opd_refresh.cjs`. The separate-process concurrency runner also verifies independent branches, cross-branch patient conflicts and simultaneous practitioner session starts, and restores the original default clinic after cleaning fixtures. These tests use a local/test site, not production.

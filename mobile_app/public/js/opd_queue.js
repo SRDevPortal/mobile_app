@@ -147,16 +147,17 @@ frappe.provide('mobile_app');
             this.$root.on('keydown',event=>{if(event.key==='Escape'){this.$root.find('.opd-branch-menu').prop('open',false).find('summary').trigger('focus');}});
             this.$root.on('change','[data-opd-branch]',async event=>{
                 if(this.busy)return;
-                this.clinic=event.target.value;this.selectedRoom=null;this.baseline=null;this.data=null;this.dirty=false;
+                this.queueOffset=0;this.clinic=event.target.value;this.selectedRoom=null;this.baseline=null;this.data=null;this.dirty=false;
                 if(this.host&&frappe.get_route()[1]==='room')frappe.set_route('doctor-clinical');
                 const url=new URL(location.href);url.searchParams.set('clinic',this.clinic);history.replaceState(null,'',url);
                 this.shell();await this.refresh();
             });
-            this.$root.on('change','[data-opd-date]',event=>{this.queueDate=event.target.value||frappe.datetime.get_today();this.refresh();});
+            this.$root.on('change','[data-opd-date]',event=>{this.queueOffset=0;this.queueDate=event.target.value||frappe.datetime.get_today();this.refresh();});
             this.$root.on('input change','[data-queue-filter]',event=>{
                 this.queueSearch=this.$root.find('[data-queue-filter="search"]').val()||'';
                 this.queueStatus=this.$root.find('[data-queue-filter="status"]').val()||'';
-                this.filterQueue();
+                this.queueOffset=0;clearTimeout(this.searchTimer);
+                this.searchTimer=setTimeout(()=>this.refresh(),250);
             });
             this.$root.on('click','[data-opd]',event=>{event.preventDefault();this.action($(event.currentTarget).attr('data-opd'),$(event.currentTarget));});
         }
@@ -175,7 +176,7 @@ frappe.provide('mobile_app');
                 this.shell();await this.refresh();
             }catch(error){this.$root.html('<div class="opd-empty">Unable to load OPD. Check your connection and clinic access, then reload.</div>');}
         }
-        hide(){window.removeEventListener('resize',this.fitDisplay);document.removeEventListener('fullscreenchange',this.fitDisplay);this.visible=false;++this.serial;frappe.realtime.off('opd_queue_changed',this.changed);frappe.realtime.socket?.off('connect',this.connected);frappe.realtime.socket?.off('disconnect',this.disconnected);document.removeEventListener('visibilitychange',this.focus);}
+        hide(){clearTimeout(this.searchTimer);window.removeEventListener('resize',this.fitDisplay);document.removeEventListener('fullscreenchange',this.fitDisplay);this.visible=false;++this.serial;frappe.realtime.off('opd_queue_changed',this.changed);frappe.realtime.socket?.off('connect',this.connected);frappe.realtime.socket?.off('disconnect',this.disconnected);document.removeEventListener('visibilitychange',this.focus);}
         connection(live){
             this.$root.find('.opd-connection').toggleClass('live',!!live).text(live?(this.display?'Live updates on activity':'Connected'):'Disconnected - displayed information may be outdated');
         }
@@ -187,8 +188,10 @@ frappe.provide('mobile_app');
         }
         async refresh(){
             if(!this.visible||!this.clinic)return;
-            if(this.busy){this.refreshPending=true;return;}
+            if(document.hidden || this.busy || this.refreshing){this.refreshPending=true;return;}
+            this.refreshPending=false;
             const serial=++this.serial;
+            const scope=[this.clinic,this.section,this.queueDate,this.queueOffset,this.queueSearch,this.queueStatus].join('|');
             this.refreshing=true;
             try{
                 let data;
@@ -207,15 +210,16 @@ frappe.provide('mobile_app');
                     const result=await response.json();
                     if(result.exc||!result.message)throw new Error('Invalid display response');
                     data=result.message;
+                }else if(this.section==='queue'){
+                    data=await read('queue_snapshot',{clinic:this.clinic,date:this.queueDate||frappe.datetime.get_today(),offset:this.queueOffset||0,search:this.queueSearch||'',status:this.queueStatus||''});
                 }else data=await read(this.section==='setup'?'get_setup':'snapshot',{clinic:this.clinic});
-                if(!this.display && this.section==='queue'){
-                    this.queueDate ||= frappe.datetime.get_today();
-                    const daily=await read('daily_visits',{clinic:this.clinic,date:this.queueDate});
-                    data.visits=daily.visits;data.daily=daily;
+                if(scope!==[this.clinic,this.section,this.queueDate,this.queueOffset,this.queueSearch,this.queueStatus].join('|')){
+                    this.refreshPending=true;return;
                 }
                 if(serial!==this.serial||!this.visible)return;
                 if(data.rooms)data.rooms.sort((a,b)=>String(a.room_number).localeCompare(String(b.room_number),undefined,{numeric:true}));
                 this.data=data;
+                if(data.daily){this.queueDate=data.daily.date;this.queueOffset=data.daily.offset;}
                 this.lastRefresh=Date.now();this.connection(!!frappe.realtime.socket?.connected);
                 if(this.display)this.renderTV();else if(this.section==='setup'){this.setup=structuredClone(data);this.dirty=false;this.renderSetup();}else if(this.section==='room')this.renderRoom();else this.renderQueue();
             }catch(e){
@@ -229,7 +233,12 @@ frappe.provide('mobile_app');
                     }else $content.prepend('<div class="opd-notice opd-refresh-error" role="alert">Refresh failed. The information below may be outdated. Use Refresh to try again.</div>');
                 }
             }
-            finally{this.refreshing=false;}
+            finally{
+                this.refreshing=false;
+                if(this.refreshPending && this.visible && !document.hidden && !this.busy){
+                    this.refreshPending=false;await this.refresh();
+                }
+            }
         }
         async mutate(method,args){
             if(this.busy)return;
@@ -239,19 +248,13 @@ frappe.provide('mobile_app');
         }
         renderQueue(){
             const d=this.data;
+            const active=document.activeElement;
+            const searchFocus=active?.matches('[data-queue-filter="search"]');
+            const selection=searchFocus?[active.selectionStart,active.selectionEnd]:null;
             const rows=d.visits.map(v=>{const s=v.stages[v.stage_index],status=v.status==='Active'?s.state:v.status;return `<tr data-queue-state="${esc(status)}" data-queue-search="${esc([v.token,v.patient_name,v.consultation_doctor_name||v.consultation_doctor,v.department].join(' ').toLowerCase())}"><td><strong>${esc(v.token)}</strong><small>${esc(v.visit_date)}</small></td><td>${esc(v.patient_name)}${v.priority?'<small class="opd-badge priority">Priority</small>':''}</td><td>${esc(v.department)}<small>${esc(v.consultation_doctor_name || v.consultation_doctor)}</small></td><td>${esc(s.stage)}<small>${esc(roomLabel(d.rooms,s.room))}</small></td><td><span class="opd-badge" data-state="${esc(status)}">${esc(status)}</span>${v.status==='Active'?`<small>${waitLabel(s.queued_at)} since queue entry</small>`:''}</td><td>${btn('visit','Open',`data-id="${esc(v.name)}"`)}${btn('print','Print token',`data-id="${esc(v.name)}"`)}${v.status==='Active'?btn('manage-visit','Manage visit',`data-id="${esc(v.name)}"`):''}</td></tr>`;}).join('');
-            this.$root.find('.opd-content').html(`<div class="opd-toolbar"><h2>Daily visits <span class="opd-count">${d.visits.length}</span></h2>${d.reception?btn('walkin','Check in walk-in','',true):''}${d.manager?btn('end-day','End day'):''}<div class="opd-queue-filters"><input type="date" data-opd-date aria-label="Visit date" value="${esc(this.queueDate)}"><input type="search" data-queue-filter="search" aria-label="Filter patients or tokens" placeholder="Filter patient or token..." value="${esc(this.queueSearch||'')}"><select data-queue-filter="status" aria-label="Filter queue status">${['','Waiting','Called','In Progress','On Hold','Completed','Withdrawn'].map(x=>`<option value="${esc(x)}" ${x===(this.queueStatus||'')?'selected':''}>${esc(x||'All statuses')}</option>`).join('')}</select></div></div><div class="opd-day-counts">${Object.entries(d.daily?.counts||{}).map(([label,count])=>`<div><small>${esc(label)}</small><strong>${count}</strong></div>`).join('')}</div>${d.daily?.previous_active?`<div class="opd-notice">${d.daily.previous_active} unfinished visits from earlier dates remain active in My OPD. Review them before ending the day.</div>`:''}<div class="opd-panel opd-scroll">${rows?`<table class="opd-table"><thead><tr><th>Token</th><th>Patient</th><th>Department / Doctor</th><th>Stage / OPD</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="opd-empty">No visits for this date. Select another date or check in a patient.</div>'}</div>`);
-            this.filterQueue();
-        }
-        filterQueue(){
-            const search=(this.queueSearch||'').trim().toLowerCase(),status=this.queueStatus||'';
-            let count=0;
-            this.$root.find('[data-queue-state]').each((_,row)=>{
-                const match=(!status||row.dataset.queueState===status)&&(!search||row.dataset.queueSearch.includes(search));
-                row.hidden=!match;if(match)count++;
-            });
-            this.$root.find('.opd-filter-empty').remove();
-            if(!count&&this.data.visits.length)this.$root.find('.opd-scroll').append('<div class="opd-empty opd-filter-empty">No patients match these filters.</div>');
+            this.$root.find('.opd-content').html(`<div class="opd-toolbar"><h2>Daily visits <span class="opd-count">${d.daily?.counts.Total ?? d.visits.length}</span></h2>${d.reception?btn('walkin','Check in walk-in','',true):''}${d.manager?btn('end-day','End day'):''}<div class="opd-queue-filters"><input type="date" data-opd-date aria-label="Visit date" value="${esc(this.queueDate)}"><input type="search" data-queue-filter="search" aria-label="Filter patients or tokens" placeholder="Filter patient or token..." value="${esc(this.queueSearch||'')}"><select data-queue-filter="status" aria-label="Filter queue status">${['','Waiting','Called','In Progress','On Hold','Completed','Withdrawn'].map(x=>`<option value="${esc(x)}" ${x===(this.queueStatus||'')?'selected':''}>${esc(x||'All statuses')}</option>`).join('')}</select></div></div><div class="opd-day-counts">${Object.entries(d.daily?.counts||{}).map(([label,count])=>`<div><small>${esc(label)}</small><strong>${count}</strong></div>`).join('')}</div>${d.daily?.previous_active?`<div class="opd-notice">${d.daily.previous_active} unfinished visits from earlier dates remain active in My OPD. Review them before ending the day.</div>`:''}<div class="opd-panel opd-scroll">${rows?`<table class="opd-table"><thead><tr><th>Token</th><th>Patient</th><th>Department / Doctor</th><th>Stage / OPD</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="opd-empty">No visits match this date and filters.</div>'}</div>`);
+            if(d.daily)this.$root.find('.opd-content').append(`<div class="opd-toolbar">${btn('queue-prev','Previous',d.daily.offset ? '' : 'disabled')}<span>Page ${Math.floor(d.daily.offset/d.daily.page_length)+1}</span>${btn('queue-next','Next',d.daily.has_more ? '' : 'disabled')}</div>`);
+            if(searchFocus){const input=this.$root.find('[data-queue-filter="search"]')[0];input?.focus();if(selection)input?.setSelectionRange(...selection);}
         }
         roomControls(room,session,current,stage){
             if(!session)return btn('occupy','Start OPD session',`data-room="${esc(room.name)}"`,true);
@@ -500,6 +503,7 @@ frappe.provide('mobile_app');
             try{
                 if(['queue','room','setup','calendar','tv','refresh'].includes(action)&&this.dirty&&!await confirm('Discard unsaved OPD setup changes?'))return;
                 if(['queue','room','setup'].includes(action)){this.selectedRoom=null;if(this.host && frappe.get_route()[1]==='room')frappe.set_route('doctor-clinical');this.section=action;this.dirty=false;this.shell();await this.refresh();return;}
+                if(action==='queue-prev'||action==='queue-next'){this.queueOffset=Math.max(0,(this.queueOffset||0)+(action==='queue-next'?1:-1)*(this.data.daily?.page_length||100));await this.refresh();return;}
                 if(action==='calendar'){if(this.host)this.host.switchSection('calendar');else frappe.set_route('doctor-clinical');return;}
                 if(action==='tv'){window.open('/app/opd-display?clinic='+encodeURIComponent(this.clinic),'_blank','noopener');return;}
                 if(action==='end-day'){

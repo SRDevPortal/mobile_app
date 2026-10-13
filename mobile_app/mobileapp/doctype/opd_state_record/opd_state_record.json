@@ -1,0 +1,52 @@
+{
+  "doctype": "DocType",
+  "name": "OPD State Record",
+  "module": "MobileApp",
+  "engine": "InnoDB",
+  "field_order": [
+    "record_type",
+    "record_id",
+    "clinic",
+    "payload",
+    "session_practitioner"
+  ],
+  "fields": [
+    {
+      "fieldname": "record_type",
+      "label": "Record Type",
+      "fieldtype": "Data",
+      "reqd": 1,
+      "read_only": 1
+    },
+    {
+      "fieldname": "record_id",
+      "label": "Record Id",
+      "fieldtype": "Small Text",
+      "reqd": 1,
+      "read_only": 1
+    },
+    {
+      "fieldname": "clinic",
+      "label": "Clinic",
+      "fieldtype": "Data",
+      "reqd": 0,
+      "read_only": 1
+    },
+    {
+      "fieldname": "payload",
+      "label": "Payload",
+      "fieldtype": "Long Text",
+      "reqd": 1,
+      "read_only": 1
+    },
+    {
+      "fieldname": "session_practitioner",
+      "label": "Session Practitioner",
+      "fieldtype": "Data",
+      "unique": 1,
+      "read_only": 1
+    }
+  ],
+  "permissions": [],
+  "track_changes": 0
+}

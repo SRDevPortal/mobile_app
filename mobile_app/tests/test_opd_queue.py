@@ -220,8 +220,9 @@ class TestOPDQueue(unittest.TestCase):
         self.assertTrue(frappe.db.exists('Patient',visit['patient']))
         self.assertEqual(visit['token'],'001')
 
-    def test_existing_records_only_and_direct_payload_edit_is_denied(self):
-        self.assertFalse(frappe.get_all('DocType',filters={'name':['like','OPD %']},pluck='name'))
+    def test_legacy_records_absent_and_direct_payload_edit_is_denied(self):
+        from mobile_app.opd_setup import LEGACY
+        self.assertFalse(frappe.get_all('DocType',filters={'name':['in',list(LEGACY)]},pluck='name'))
         visit=self.visit()
         workflow=frappe.db.get_value(store.WORKFLOW,{'opd_visit_id':visit['name']},'name')
         self.assertTrue(workflow)
@@ -230,7 +231,11 @@ class TestOPDQueue(unittest.TestCase):
         self.assertEqual(store.value('Visit',visit['name'],'status'),'Active')
         settings=frappe.get_doc(store.SETTINGS);settings.set(store.FIELD,'{}')
         store.protect_settings(settings)
-        self.assertIn(self.clinic,frappe.parse_json(settings.get(store.FIELD))['clinics'])
+        self.assertEqual(frappe.parse_json(settings.get(store.FIELD))['default_clinic'], self.clinic)
+        state = frappe.get_doc(store.STATE, store.state_key('Clinic',self.clinic))
+        state.payload = '{}'
+        with self.assertRaises(frappe.PermissionError): state.save(ignore_permissions=True)
+        self.assertEqual(store.get('Clinic',self.clinic).name,self.clinic)
 
     def test_setup_lists_departments_and_genders_without_filters(self):
         setup=api.get_setup(self.clinic)

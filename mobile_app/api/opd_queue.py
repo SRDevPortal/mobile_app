@@ -25,7 +25,7 @@ def _doc(*args, **kwargs):
 
 def _value(*args, **kwargs):
     if args[0] in store.KINDS: return store.value(*args, **kwargs)
-    kwargs.setdefault('for_update', bool(frappe.flags.in_opd_mutation))
+    kwargs.setdefault('for_update', bool(frappe.flags.in_opd_mutation) and args[0] not in {'User','Healthcare Practitioner','Medical Department'})
     return frappe.db.get_value(*args, **kwargs)
 
 
@@ -80,8 +80,7 @@ def appointment_branch(doctype, name):
     if doctype == 'Mobile App Appointment':
         encounter = _value(doctype,name,'patient_encounter')
         if encounter: doctype,name='Patient Encounter',encounter
-    config=store.configuration()
-    return config.get('appointment_branches',{}).get(f'{doctype}:{name}') or config.get('default_clinic')
+    return store.appointment_branch(doctype, name)
 
 
 def _access(clinic, display=False):
@@ -130,7 +129,7 @@ def _mutation(fn):
         clinic, request_id = data['clinic'], str(data.get('request_id') or '')
         _access(clinic)
         if not request_id or len(request_id) > 100: frappe.throw("A request ID is required. Refresh and try again.")
-        store.lock()
+        store.lock(None if fn.__name__ in {'save_branch', 'delete_branch', 'assign_appointment_branch'} else clinic)
         key = hashlib.sha256((clinic + ':' + frappe.session.user + ':' + request_id).encode()).hexdigest()
         fingerprint = hashlib.sha256(json.dumps(dict(data), sort_keys=True, default=str).encode()).hexdigest()
         existing = store.event_for_request(key)
@@ -178,16 +177,24 @@ def _route_data(doc):
     return {k: doc.get(k) for k in ('name', 'department', *ROOM_FIELDS, 'booking_labels', 'revision')} | {'steps':_route_steps(doc)}
 
 
-def _visit_data(doc):
+def _visit_data(doc, doctors=None, clinics=None):
     result = {k: doc.get(k) for k in ('name', 'patient', 'patient_name', 'department', 'original_doctor',
         'consultation_doctor', 'visit_date', 'status', 'stage_index', 'priority', 'revision', 'encounter',
         'source_doctype', 'source_name', 'route_version', 'vitals')} | {
-        'clinic':doc.clinic, 'clinic_name':_value('Clinic',doc.clinic,'clinic_name'),
-        'consultation_doctor_name': _value('Healthcare Practitioner', doc.consultation_doctor, 'practitioner_name') or doc.consultation_doctor,
+        'clinic':doc.clinic, 'clinic_name':clinics.get(doc.clinic) if clinics is not None else _value('Clinic',doc.clinic,'clinic_name'),
+        'consultation_doctor_name': (doctors.get(doc.consultation_doctor) if doctors is not None else _value('Healthcare Practitioner', doc.consultation_doctor, 'practitioner_name')) or doc.consultation_doctor,
         'token': (doc.get('token_prefix')+'-' if doc.get('token_prefix') else '')+str(doc.token_number).zfill(3), 'stages': [{k: s.get(k) for k in (
             'stage', 'purpose_id', 'room', 'state', 'queued_at', 'called_at', 'started_at', 'completed_at', 'session')} for s in doc.stages]}
 
     return frappe.parse_json(frappe.as_json(result))
+
+
+def _visit_rows(visits):
+    ids = list({v.consultation_doctor for v in visits if v.consultation_doctor})
+    doctors = {d.name:d.practitioner_name for d in frappe.get_all('Healthcare Practitioner',
+        filters={'name':['in', ids]}, fields=['name','practitioner_name'])} if ids else {}
+    clinics = {name:_value('Clinic',name,'clinic_name') for name in {v.clinic for v in visits}}
+    return [_visit_data(v, doctors, clinics) for v in visits]
 
 
 @frappe.whitelist()
@@ -274,7 +281,7 @@ def assign_appointment_branch(clinic,request_id,doctype,name,reason):
     previous=appointment_branch(source.doctype,source.name)
     if previous:_access(previous)
     if find_visit(source.doctype,source.name): frappe.throw('This appointment already has an OPD visit. Finish or withdraw it before arranging a new branch visit.')
-    config=store.configuration();config.setdefault('appointment_branches',{})[f'{source.doctype}:{source.name}']=clinic;store.write_configuration(config)
+    store.set_appointment_branch(source.doctype, source.name, clinic)
     return {'clinic':clinic}
 
 
@@ -594,7 +601,7 @@ def check_in(clinic, request_id, department, doctor, patient=None, patient_detai
                     'queued_at': now_datetime() if i == 0 else None} for i,step in enumerate(_route_steps(route))]})
     _save(visit)
     if source:
-        config=store.configuration();config.setdefault('appointment_branches',{})[f'{source.doctype}:{source.name}']=clinic;store.write_configuration(config)
+        store.set_appointment_branch(source.doctype, source.name, clinic)
         previous = frappe.flags.opd_checkin; frappe.flags.opd_checkin = True
         try: cal.update_appointment(source.doctype, source.name, 'check_in', 'Approved', reason=reason)
         finally: frappe.flags.opd_checkin = previous
@@ -778,24 +785,65 @@ def apply_routes(clinic,request_id,expected_version,patients,reason):
 
 
 def _day_state(clinic, date):
-    visits = [_doc('Visit', n) for n in _all('Visit', filters={'clinic':clinic}, pluck='name')]
-    selected = [v for v in visits if str(v.visit_date) == str(date)]
-    unfinished = [v for v in visits if v.status == 'Active' and getdate(v.visit_date) <= date]
-    sessions = [_doc('Session', n) for n in _all('Session', filters={'clinic':clinic}, pluck='name')]
+    selected = store.records('Visit', {'clinic':clinic, 'visit_date':str(date)})
+    unfinished = store.records('Visit', {'clinic':clinic, 'status':'Active', 'visit_date':['<=',str(date)]})
+    sessions = store.records('Session', {'clinic':clinic})
     return selected, unfinished, sessions
 
 
-@frappe.whitelist()
-def daily_visits(clinic, date=None):
-    _access(clinic)
+def _daily_visits(clinic, date=None, offset=0, page_length=100, search="", status=""):
     date = getdate(date)
-    visits, unfinished, sessions = _day_state(clinic, date)
-    counts = {'Total':len(visits), 'Waiting':0, 'Called':0, 'In Progress':0, 'On Hold':0, 'Completed':0, 'Withdrawn':0}
-    for visit in visits:
-        status = visit.stages[visit.stage_index].state if visit.status == 'Active' else visit.status
-        counts[status] = counts.get(status, 0) + 1
-    return {'date':str(date), 'visits':[_visit_data(v) for v in visits], 'counts':counts,
-        'previous_active':sum(getdate(v.visit_date)<date for v in unfinished), 'open_rooms':len(sessions)}
+    offset = max(0,cint(offset)); page_length = min(200,max(1,cint(page_length)))
+    counts = {'Total':0, 'Waiting':0, 'Called':0, 'In Progress':0, 'On Hold':0, 'Completed':0, 'Withdrawn':0}
+    groups = frappe.db.sql("""SELECT opd_queue_status AS status, COUNT(*) AS total
+        FROM `tabMobile Appointment Workflow` WHERE opd_clinic=%s AND opd_visit_date=%s
+          AND opd_payload IS NOT NULL AND opd_payload != '' GROUP BY opd_queue_status""", (clinic,date), as_dict=True)
+    for group in groups:
+        counts[group.status] = group.total
+        counts['Total'] += group.total
+    where = "w.opd_clinic=%s AND w.opd_visit_date=%s AND w.opd_payload IS NOT NULL AND w.opd_payload != ''"
+    params = [clinic,date]
+    join = ""
+    search = str(search or '').strip().lower()[:200]
+    if status:
+        where += " AND w.opd_queue_status=%s"
+        params.append(status)
+    if search:
+        join = " LEFT JOIN `tabHealthcare Practitioner` h ON h.name=JSON_UNQUOTE(JSON_EXTRACT(w.opd_payload,'$.consultation_doctor'))"
+        where += """ AND LOCATE(%s, LOWER(CONCAT_WS(' ',
+            JSON_UNQUOTE(JSON_EXTRACT(w.opd_payload,'$.patient_name')),
+            JSON_UNQUOTE(JSON_EXTRACT(w.opd_payload,'$.department')),
+            COALESCE(h.practitioner_name, JSON_UNQUOTE(JSON_EXTRACT(w.opd_payload,'$.consultation_doctor'))),
+            CONCAT(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(w.opd_payload,'$.token_prefix')), ''), '-',
+                LPAD(JSON_UNQUOTE(JSON_EXTRACT(w.opd_payload,'$.token_number')),
+                    GREATEST(3,CHAR_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(w.opd_payload,'$.token_number')))), '0'))))) > 0"""
+        params.append(search)
+    filtered_total = frappe.db.sql(f"SELECT COUNT(*) FROM `tabMobile Appointment Workflow` w{join} WHERE {where}",
+        tuple(params))[0][0] if search or status else counts['Total']
+    offset = min(offset, max(0, (filtered_total-1)//page_length)*page_length)
+    # Filtering and pagination both happen in SQL, including searches beyond page one.
+    payloads = frappe.db.sql(f"""SELECT w.opd_payload FROM `tabMobile Appointment Workflow` w{join}
+        WHERE {where} ORDER BY w.creation, w.name LIMIT %s OFFSET %s""", (*params,page_length,offset))
+    visits = [store.Record('Visit', json.loads(row[0])) for row in payloads]
+    previous_active = frappe.db.count(store.WORKFLOW, {'opd_clinic':clinic, 'opd_status':'Active', 'opd_visit_date':['<',date]})
+    return {'date':str(date), 'visits':_visit_rows(visits), 'counts':counts,
+        'previous_active':previous_active, 'open_rooms':len(store.records('Session', {'clinic':clinic})),
+        'offset':offset, 'page_length':page_length, 'filtered_total':filtered_total, 'has_more':offset+page_length<filtered_total}
+
+
+
+@frappe.whitelist()
+def daily_visits(clinic, date=None, offset=0, page_length=100, search="", status=""):
+    _access(clinic)
+    return _daily_visits(clinic, date, offset, page_length, search, status)
+
+
+@frappe.whitelist()
+def queue_snapshot(clinic, date=None, offset=0, page_length=100, search="", status=""):
+    data = _snapshot(clinic, include_visits=False)
+    daily = _daily_visits(clinic, date, offset, page_length, search, status)
+    data.update(visits=daily['visits'], daily=daily)
+    return data
 
 
 @frappe.whitelist()
@@ -806,7 +854,7 @@ def preview_end_day(clinic, date):
     _, unfinished, sessions = _day_state(clinic, date)
     blocked = [v for v in unfinished if v.stages[v.stage_index].state in ('Called','In Progress')]
     return {'sequence':_value('Clinic',clinic,'event_sequence'), 'date':str(date),
-        'visits':[_visit_data(v) for v in unfinished], 'blocked':[v.name for v in blocked],
+        'visits':_visit_rows(unfinished), 'blocked':[v.name for v in blocked],
         'rooms':[{'name':s.name,'room':s.room} for s in sessions if not s.current_visit]}
 
 
@@ -839,6 +887,10 @@ def end_day(clinic, request_id, date, expected_sequence, reason, close_visits=0)
 
 @frappe.whitelist()
 def snapshot(clinic):
+    return _snapshot(clinic)
+
+
+def _snapshot(clinic, include_visits=True):
     clinic_doc=_access(clinic); allowed=None if _reception() else _assigned_rooms(clinic)
     room_ids=_all('Room',filters={'clinic':clinic},pluck='name')
     rooms=[_room_data(_doc('Room',n)) for n in room_ids if allowed is None or n in allowed]
@@ -859,9 +911,9 @@ def snapshot(clinic):
             'practitioner_name': a['practitioner']}) for a in room['assignments']]
     sessions=_all('Session',filters={'clinic':clinic,'status':['!=','Closed']}, fields=['name','room','controller','practitioner','status','current_visit','revision','call_sequence'])
     sessions=[s for s in sessions if allowed is None or s.room in allowed]; visits=[]
-    for name in _all('Visit',filters={'clinic':clinic,'status':'Active'},pluck='name',order_by='creation'):
-        doc=_doc('Visit',name)
-        if allowed is None or doc.stages[doc.stage_index].room in allowed: visits.append(_visit_data(doc))
+    if include_visits:
+        visits = _visit_rows([v for v in store.records('Visit', {'clinic':clinic,'status':'Active'})
+            if allowed is None or v.stages[v.stage_index].room in allowed])
     return {'sequence':clinic_doc.event_sequence,'rooms':rooms,'sessions':sessions,'visits':visits,
         'reception':_reception(),'manager':_manager(),'user':frappe.session.user,
         'controllers': [u.name for u in get_setup(clinic)['users']] if _manager() else []}

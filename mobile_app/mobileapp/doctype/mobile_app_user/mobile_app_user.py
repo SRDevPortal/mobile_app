@@ -55,6 +55,30 @@ class MobileAppUser(Document):
 			timestamp = convert_utc_to_system_timezone(timestamp).replace(tzinfo=None)
 		self.last_login_at = timestamp
 
+	def update_child_table(self, fieldname, df=None):
+		"""Full-sync snapshots retain unchanged children without rewriting their history."""
+		previous = self.get_doc_before_save()
+		if not self.flags.mobile_app_incremental_sync or previous is None:
+			return super().update_child_table(fieldname, df)
+		from mobile_app.mobileapp.appointment_sync import stored_values
+		df = df or self.meta.get_field(fieldname)
+		if df.options in (self.flags.ignore_children_type or ()) or frappe.get_meta(df.options).is_virtual:
+			return super().update_child_table(fieldname, df)
+		old = {row.name:row for row in previous.get(fieldname) or []}
+		rows = self.get(fieldname) or []
+		removed = set(old) - {row.name for row in rows}
+		if removed:
+			frappe.db.delete(df.options, {'parent':self.name, 'parenttype':self.doctype,
+				'parentfield':fieldname, 'name':['in',list(removed)]})
+		def values(row):
+			return {k:v for k,v in stored_values(row).items() if k not in {'modified','modified_by'}}
+		for row in rows:
+			before = old.get(row.name)
+			if before and values(row) == values(before):
+				row.modified, row.modified_by = before.modified, before.modified_by
+			else:
+				row.db_update()
+
 	def on_update(self):
 		self._ensure_profile_image_public()
 

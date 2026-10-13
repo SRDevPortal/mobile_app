@@ -11,6 +11,18 @@ from mobile_app.mobileapp.appointment_utils import (
 )
 
 
+def stored_values(doc):
+    """Compare persisted values, normalizing Frappe dates and numeric field types."""
+    values = doc.get_valid_dict(convert_dates_to_str=True)
+    from frappe.utils import getdate, get_datetime, get_time
+    for field in doc.meta.fields:
+        value = values.get(field.fieldname)
+        if value in (None, ''): continue
+        convert = {'Date':getdate, 'Datetime':get_datetime, 'Time':get_time}.get(field.fieldtype)
+        if convert: values[field.fieldname] = str(convert(value))
+    return values
+
+
 def sync_appointments_from_user(user_doc: Document) -> list[str]:
 	"""Upsert standalone appointments from parent child table. Returns synced names."""
 	if frappe.flags.get("in_appointment_sync_from_user"):
@@ -37,6 +49,7 @@ def _upsert_appointment_from_child(row, parent_name: str) -> str | None:
 	exists = frappe.db.exists("Mobile App Appointment", ext_id)
 	if exists:
 		doc = frappe.get_doc("Mobile App Appointment", ext_id)
+		before = stored_values(doc)
 		preserved_agent = doc.assigned_agent
 		doc.update({k: v for k, v in fields.items() if k not in ("doctype", "appointment_external_id")})
 		if preserved_agent and not doc.assigned_agent:
@@ -47,7 +60,8 @@ def _upsert_appointment_from_child(row, parent_name: str) -> str | None:
 	apply_consultation_rules(doc)
 	doc.flags.ignore_permissions = True
 	if exists:
-		doc.save()
+		if stored_values(doc) != before:
+			doc.save()
 	else:
 		doc.insert()
 	return doc.name

@@ -1,8 +1,4 @@
-"""OPD state in existing Healthcare Settings, Mobile Appointment Workflow and Version.
-
-These are domain records, not Frappe DocTypes. Every write is made under the
-Healthcare Settings configuration row lock by the permission-checked queue API.
-"""
+"""Branch-partitioned OPD state and indexed visit records."""
 import hashlib
 import json
 import frappe
@@ -11,28 +7,95 @@ from frappe.utils import now_datetime
 SETTINGS = "Healthcare Settings"
 FIELD = "custom_opd_configuration"
 WORKFLOW = "Mobile Appointment Workflow"
+STATE = "OPD State Record"
 KINDS = {"Clinic", "Room", "Route", "Session", "Visit", "Event"}
 COLLECTIONS = {"Clinic":"clinics", "Room":"rooms", "Route":"routes", "Session":"sessions"}
 VISIT_FIELDS = {"name":"opd_visit_id", "clinic":"opd_clinic", "patient":"opd_patient",
-    "status":"opd_status", "source_key":"opd_source_key", "token_key":"opd_token_key"}
+    "visit_date":"opd_visit_date", "status":"opd_status", "source_key":"opd_source_key", "token_key":"opd_token_key"}
 
 
 def locked(): return bool(frappe.flags.in_opd_mutation)
 
 
+def state_key(kind, name):
+    return hashlib.sha256(f"{kind}:{name}".encode()).hexdigest()
+
+
+def _state_rows(kind=None, name=None, clinic=None, for_update=False, practitioner=None):
+    filters = {}
+    if kind: filters['record_type'] = kind
+    if name: filters['name'] = state_key(kind, name)
+    if clinic: filters['clinic'] = clinic
+    if practitioner: filters['session_practitioner'] = practitioner
+    return frappe.db.get_values(STATE, filters, ['name', 'record_type', 'record_id', 'clinic', 'payload'],
+        as_dict=True, for_update=for_update, order_by='name')
+
+
+def _save_state(kind, name, clinic, payload):
+    key = state_key(kind, name)
+    values = {'record_type':kind, 'record_id':name, 'clinic':clinic, 'payload':frappe.as_json(payload),
+        'session_practitioner':(payload.get('practitioner') or None) if kind == 'Session' else None}
+    if frappe.db.exists(STATE, key):
+        frappe.db.set_value(STATE, key, values)
+    else:
+        frappe.get_doc({'doctype':STATE, 'name':key, **values}).db_insert()
+
+
 def configuration():
-    rows = frappe.db.sql("SELECT value FROM `tabSingles` WHERE doctype=%s AND field=%s" + (" FOR UPDATE" if locked() else ""), (SETTINGS, FIELD))
-    return json.loads(rows[0][0]) if rows and rows[0][0] else {key:{} for key in COLLECTIONS.values()}
+    # Compatibility view for setup/administration only. Queue reads use indexed state rows.
+    rows = frappe.db.sql("SELECT value FROM `tabSingles` WHERE doctype=%s AND field=%s", (SETTINGS, FIELD))
+    config = json.loads(rows[0][0]) if rows and rows[0][0] else {}
+    for collection in COLLECTIONS.values(): config[collection] = {}
+    config['appointment_branches'] = {}
+    for row in _state_rows():
+        data = json.loads(row.payload)
+        if row.record_type in COLLECTIONS:
+            config[COLLECTIONS[row.record_type]][row.record_id] = data
+        elif row.record_type == 'AppointmentBranch':
+            config['appointment_branches'][row.record_id] = row.clinic
+    return config
 
 
-def lock():
-    rows = frappe.db.sql("SELECT value FROM `tabSingles` WHERE doctype=%s AND field=%s FOR UPDATE", (SETTINGS, FIELD))
-    if not rows: frappe.throw("OPD setup is not installed. Run the mobile_app migration.")
+def lock(clinic=None):
+    if clinic:
+        rows = frappe.db.sql("SELECT name FROM `tabOPD State Record` WHERE name=%s FOR UPDATE",
+            state_key('Clinic', clinic))
+    else:
+        # Administrative changes acquire the global gate, then branches in stable order.
+        rows = frappe.db.sql("SELECT value FROM `tabSingles` WHERE doctype=%s AND field=%s FOR UPDATE", (SETTINGS, FIELD))
+        frappe.db.sql("SELECT name FROM `tabOPD State Record` WHERE record_type='Clinic' ORDER BY name FOR UPDATE")
+    if not rows: frappe.throw("OPD setup is not installed or this branch no longer exists.")
+
+
+def appointment_branch(doctype, name):
+    value = frappe.db.get_value(STATE, state_key('AppointmentBranch', f'{doctype}:{name}'), 'clinic', for_update=locked())
+    if value: return value
+    raw = frappe.db.get_single_value(SETTINGS, FIELD, cache=False)
+    return json.loads(raw or '{}').get('default_clinic')
+
+
+def set_appointment_branch(doctype, name, clinic):
+    if not locked(): frappe.throw('Use Doctor Clinical to update OPD.', frappe.PermissionError)
+    _save_state('AppointmentBranch', f'{doctype}:{name}', clinic, {})
 
 
 def write_configuration(value):
     if not locked(): frappe.throw("Use Doctor Clinical to update OPD.", frappe.PermissionError)
-    frappe.db.sql("UPDATE `tabSingles` SET value=%s WHERE doctype=%s AND field=%s", (frappe.as_json(value), SETTINGS, FIELD))
+    # Used only while holding the global administrative lock (setup/migration).
+    existing = configuration()
+    for kind, collection in COLLECTIONS.items():
+        for name, data in value.get(collection, {}).items():
+            if existing[collection].get(name) != data:
+                _save_state(kind, name, name if kind == 'Clinic' else data['clinic'], data)
+        for name in existing[collection].keys() - value.get(collection, {}).keys():
+            frappe.db.delete(STATE, {'name':state_key(kind, name)})
+    for name, clinic in value.get('appointment_branches', {}).items():
+        if existing['appointment_branches'].get(name) != clinic:
+            _save_state('AppointmentBranch', name, clinic, {})
+    for name in existing['appointment_branches'].keys() - value.get('appointment_branches', {}).keys():
+        frappe.db.delete(STATE, {'name':state_key('AppointmentBranch', name)})
+    metadata = {k:v for k,v in value.items() if k not in {*COLLECTIONS.values(), 'appointment_branches'}}
+    frappe.db.sql("UPDATE `tabSingles` SET value=%s WHERE doctype=%s AND field=%s", (frappe.as_json(metadata), SETTINGS, FIELD))
 
 
 def _nested(value):
@@ -75,6 +138,8 @@ def _match(row, filters):
             if op=='!=' and actual==value:return False
             if op=='in' and actual not in value:return False
             if op=='is' and bool(actual)!=(value=='set'):return False
+            if op=='<' and str(actual)>=str(value):return False
+            if op=='<=' and str(actual)>str(value):return False
         elif actual!=expected:return False
     return True
 
@@ -82,11 +147,11 @@ def _match(row, filters):
 def records(kind, filters=None):
     if isinstance(filters,str):filters={'name':filters}
     if kind in COLLECTIONS:
-        rows=list(configuration().get(COLLECTIONS[kind],{}).values())
+        rows=[json.loads(row.payload) for row in _state_rows(kind, (filters or {}).get('name'), (filters or {}).get('clinic'), for_update=locked() and bool((filters or {}).get('name') or (filters or {}).get('clinic')), practitioner=(filters or {}).get('practitioner'))]
     elif kind=='Visit':
         query={VISIT_FIELDS[k]:v for k,v in (filters or {}).items() if k in VISIT_FIELDS}
         query['opd_payload']=['is','set']
-        rows=[json.loads(v) for v in frappe.db.get_values(WORKFLOW,query,'opd_payload',pluck=True,for_update=locked()) if v]
+        rows=[json.loads(v) for v in frappe.db.get_values(WORKFLOW,query,'opd_payload',pluck=True,for_update=locked(), order_by='creation, name') if v]
     elif kind=='Event':
         query={'ref_doctype':SETTINGS,'docname':SETTINGS}
         if filters and filters.get('request_key'):query['name']='opd-'+filters['request_key']
@@ -123,11 +188,12 @@ def save(record):
     record['modified']=str(now_datetime())
     data=json.loads(frappe.as_json(dict(record)))
     if record.kind in COLLECTIONS:
-        config=configuration();collection=config.setdefault(COLLECTIONS[record.kind],{})
-        if record.kind=='Session' and record.status=='Closed':collection.pop(record.name,None)
-        else:collection[record.name]=data
-        write_configuration(config)
+        if record.kind=='Session' and record.status=='Closed':
+            frappe.db.delete(STATE, {'name':state_key(record.kind, record.name)})
+        else:
+            _save_state(record.kind, record.name, record.name if record.kind=='Clinic' else record.clinic, data)
     elif record.kind=='Visit':
+        data['queue_status'] = record.stages[record.stage_index].state if record.status == 'Active' else record.status
         existing=frappe.db.get_value(WORKFLOW,{'opd_visit_id':record.name},'name',for_update=True)
         if not existing and record.source_doctype:
             from mobile_app.api.appointment_calendar import _key
@@ -145,6 +211,7 @@ def save(record):
             doc=frappe.get_doc({'doctype':WORKFLOW,'appointment_key':key,'reference_doctype':source_doctype,
                 'reference_name':source_name,'workflow_status':'Checked In' if not record.source_doctype else 'Approved'})
         doc.opd_payload=frappe.as_json(data)
+        doc.opd_queue_status=data['queue_status']
         for key,field in VISIT_FIELDS.items():doc.set(field,record.get(key))
         doc.flags.ignore_version=True;doc.save(ignore_permissions=True)
     elif record.kind=='Event':
@@ -156,13 +223,13 @@ def save(record):
 
 def delete(kind,name):
     if not locked():frappe.throw('Use Doctor Clinical to update OPD.',frappe.PermissionError)
-    config=configuration();config.get(COLLECTIONS[kind],{}).pop(name,None);write_configuration(config)
+    frappe.db.delete(STATE, {'name':state_key(kind, name)})
 
 
 def protect_workflow(doc,method=None):
     if locked() or frappe.flags.in_migrate:return
-    old=frappe.db.get_value(WORKFLOW,doc.name,['opd_payload',*VISIT_FIELDS.values()],as_dict=True,for_update=True) if not doc.is_new() else {}
-    if any((doc.get(field) or '') != ((old or {}).get(field) or '') for field in ['opd_payload',*VISIT_FIELDS.values()]):
+    old=frappe.db.get_value(WORKFLOW,doc.name,['opd_payload','opd_queue_status',*VISIT_FIELDS.values()],as_dict=True,for_update=True) if not doc.is_new() else {}
+    if any((doc.get(field) or '') != ((old or {}).get(field) or '') for field in ['opd_payload','opd_queue_status',*VISIT_FIELDS.values()]):
         frappe.throw('Manage OPD visits through Doctor Clinical.',frappe.PermissionError)
 
 

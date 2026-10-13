@@ -43,6 +43,7 @@ frappe.provide("mobile_app");
                 const value = e.target.value;
                 if (moment(value, "YYYY-MM-DD", true).isValid()) this.leaveDraft(() => {this.date = value; this.load();});
             });
+            root.on("change", ".dd-opd-enabled, .dd-online-enabled", () => this.updatePriceRequirements());
             root.on("change", ".dd-leave-mode", e => {
                 this.leaveRange = e.target.value === "range";
                 this.$root.find(".dd-leave-end-label").prop("hidden", !this.leaveRange);
@@ -144,13 +145,13 @@ frappe.provide("mobile_app");
                             <label class="dd-appointment-toggle"><input type="checkbox" class="dd-opd-enabled" ${d.accepts_opd_appointments ? "checked" : ""}> OPD (in-person)</label>
                             <p class="dd-note">Allow in-person appointments.</p>
                             <label class="dd-price-label" for="dd-opd-price">OPD consultation charge</label>
-                            <input id="dd-opd-price" class="form-control" type="number" min="0" step="0.01" required value="${esc(d.op_consulting_charge)}">
+                            <input id="dd-opd-price" class="form-control" type="number" min="0" step="0.01" value="${esc(d.op_consulting_charge)}">
                         </section>
                         <section class="dd-appointment-card" aria-label="Online appointment settings">
                             <label class="dd-appointment-toggle"><input type="checkbox" class="dd-online-enabled" ${d.accepts_online_appointments ? "checked" : ""}> Online</label>
                             <p class="dd-note">Allow online consultations in the mobile app.</p>
                             <label class="dd-price-label" for="dd-online-price">Online consultation charge</label>
-                            <input id="dd-online-price" class="form-control" type="number" min="0" step="0.01" required value="${esc(d.online_consulting_charge)}">
+                            <input id="dd-online-price" class="form-control" type="number" min="0" step="0.01" value="${esc(d.online_consulting_charge)}">
                         </section>
                     </div>
                     <button class="ac-btn ac-primary" data-dd="save-appointment-modes">Save appointment settings</button>
@@ -167,6 +168,7 @@ frappe.provide("mobile_app");
                 ${d.status !== "Active" ? '<p class="dd-note">This doctor is inactive. Their time slots cannot be booked.</p>' : ""}
                 <div class="dd-calendar"></div><div class="dd-key"><span>Available</span><span class="dd-leave-key">Leave / Holiday</span><span class="dd-off-key">Weekly off</span></div>
                 ${!this.data.schedules.some(s => !s.disabled && s.slots.length) && !this.data.week_exceptions.some(e => e.slots.length) ? '<p class="dd-note">No working hours configured. Add a working schedule above.</p>' : ""}`);
+            this.updatePriceRequirements();
             const events = this.data.calendar_days.map(day => ({
                 title: day.status === 'working' ? 'Available' : day.status === 'leave' ? 'Leave / Holiday' : day.status === 'inactive' ? 'Inactive' : 'Weekly off',
                 start: day.date, allDay: true,
@@ -396,8 +398,15 @@ frappe.provide("mobile_app");
             });
             dialog.show();
         }
+        updatePriceRequirements() {
+            for (const mode of ['opd', 'online']) {
+                const required = this.$root.find(`.dd-${mode}-enabled`).prop('checked');
+                this.$root.find(`#dd-${mode}-price`).prop('required', required).attr('aria-required', String(required));
+            }
+        }
         async saveAppointmentModes() {
             if (this.saving || !this.data.doctor.can_edit) return;
+            this.updatePriceRequirements();
             const prices = this.$root.find('#dd-opd-price, #dd-online-price').toArray();
             if (!prices.every(input => input.reportValidity())) return;
             const opdPrice = this.$root.find('#dd-opd-price').val();

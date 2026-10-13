@@ -23,7 +23,9 @@
   "opd_status",
   "opd_source_key",
   "opd_token_key",
-  "opd_payload"
+  "opd_payload",
+  "opd_visit_date",
+  "opd_queue_status"
  ],
  "fields": [
   {
@@ -168,6 +170,20 @@
    "fieldtype": "Long Text",
    "read_only": 1,
    "hidden": 1
+  },
+  {
+   "fieldname": "opd_visit_date",
+   "label": "OPD Visit Date",
+   "fieldtype": "Date",
+   "hidden": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "opd_queue_status",
+   "label": "OPD Queue Status",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "read_only": 1
   }
  ],
  "permissions": [

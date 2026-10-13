@@ -157,25 +157,51 @@ def _replace_child_table(doc, fieldname: str, rows: list[dict[str, Any]] | None)
 		return
 	if not isinstance(rows, list):
 		_err(_("{0} must be an array").format(fieldname))
-	# A profile row is also a chat identity. Preserve echoed IDs only when
-	# they belong to this user; never attach another user's child row.
-	existing_profiles = {row.name for row in doc.get("profiles") or []} if fieldname == "profiles" else set()
+	keys = {
+		"appointments": ("appointment_external_id",), "sessions": ("session_external_id",),
+		"medical_items": ("record_type", "record_external_id"),
+		"engagement_items": ("record_type", "record_external_id"), "health_entries": ("tool_key", "entry_id"),
+	}
+	existing = {row.name: row for row in doc.get(fieldname) or [] if row.name}
+	identity_fields = keys.get(fieldname, ())
+	def identity(row):
+		values = tuple(row.get(k) for k in identity_fields)
+		return values if values and all(v is not None and v != "" for v in values) else None
+	by_identity = {identity(row): row.name for row in existing.values() if identity(row)}
 	seen = set()
 	cleaned_rows = []
 	for row in rows:
 		if not isinstance(row, dict):
 			continue
 		cleaned = _clean_child_row(row)
-		if fieldname == "profiles" and row.get("name"):
-			profile_id = str(row["name"])
-			if profile_id not in existing_profiles or profile_id in seen:
-				frappe.throw(_("The selected profile does not belong to this user or is repeated."), frappe.PermissionError)
-			seen.add(profile_id)
-			cleaned["name"] = profile_id
+		row_name = row.get("name") or by_identity.get(identity(row))
+		if row_name:
+			if row_name not in existing or row_name in seen:
+				frappe.throw(_("The selected row does not belong to this user or is repeated."), frappe.PermissionError)
+			seen.add(row_name)
+			cleaned["name"] = row_name
+			for field in ("creation", "owner", "modified", "modified_by"):
+				cleaned[field] = existing[row_name].get(field)
 		cleaned_rows.append(cleaned)
 	doc.set(fieldname, [])
 	for row in cleaned_rows:
 		doc.append(fieldname, row)
+
+
+def _sync_snapshot(doc):
+	from mobile_app.mobileapp.appointment_sync import stored_values
+	return (stored_values(doc), {field: [{k:v for k,v in stored_values(row).items()
+		if k not in _CHILD_ROW_META_KEYS or k in {"name", "idx"}} for row in doc.get(field) or []]
+		for field in doc._table_fieldnames})
+
+
+def _save_sync_user(doc, before):
+	# Normalize controller-derived values before deciding whether persistence is needed.
+	doc._normalize_last_login_at()
+	doc._sync_name_from_primary_profile()
+	if before is None or _sync_snapshot(doc) != before:
+		doc.flags.mobile_app_incremental_sync = True
+		doc.save(ignore_permissions=True)
 
 
 def _find_user_name(p: dict[str, Any]) -> str | None:
@@ -290,9 +316,11 @@ def users_full_sync():
 		existing = _get_existing_user_name(data)
 		if existing:
 			doc = frappe.get_doc("Mobile App User", existing)
+			before = _sync_snapshot(doc)
 			doc.update({k: v for k, v in fields.items() if k not in ("doctype", "external_id") and v is not None})
 		else:
 			doc = frappe.get_doc(fields)
+			before = None
 
 		_replace_child_table(doc, "profiles", data.get("profiles"))
 		_replace_child_table(doc, "sessions", data.get("sessions"))
@@ -300,8 +328,9 @@ def users_full_sync():
 		_replace_child_table(doc, "health_entries", data.get("health_entries"))
 		_replace_child_table(doc, "appointments", data.get("appointments"))
 		_replace_child_table(doc, "engagement_items", data.get("engagement_items"))
-		doc.save(ignore_permissions=True)
-		sync_appointments_from_user(doc)
+		_save_sync_user(doc, before)
+		if data.get("appointments") is not None:
+			sync_appointments_from_user(doc)
 		frappe.db.commit()
 
 	return _ok(_mobile_app_user_api_payload(doc), 200)

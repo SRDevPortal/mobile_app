@@ -19,6 +19,9 @@ class TestDoctorDirectory(unittest.TestCase):
                 "sr_pathy_name": "Schedule Test Pathy " + self.suffix}).insert().name
         self.doctor = frappe.get_doc({"doctype": "Healthcare Practitioner", "first_name": "Schedule Test " + self.suffix,
             "practitioner_name": "Schedule Test " + self.suffix, "status": "Active", "sr_qualification": "Test", "sr_pathy": self.pathy}).insert()
+        if self._testMethodName.startswith("test_appointment_modes_"):
+            api.set_appointment_modes(self.doctor.name, str(self.doctor.modified), 1, 0, 100, 200)
+            self.doctor.reload()
         self.date = "2099-01-07"  # Wednesday
         self.rows = [{"day": "Wednesday", "from_time": "10:00", "to_time": "10:30", "maximum_appointments": 1}]
 
@@ -327,6 +330,33 @@ class TestDoctorDirectory(unittest.TestCase):
         self.assertEqual(self.doctor.custom_about_doctor, "A short biography")
         with self.assertRaises(frappe.ValidationError):
             api.set_about_doctor(self.doctor.name, str(self.doctor.modified), {"unexpected": "object"})
+
+    def test_enabled_consultation_requires_its_price(self):
+        for opd, online, opd_price, online_price in [
+            (1, 0, "", ""), (0, 1, "", ""),
+            (1, 1, "", 200), (1, 1, 100, "   "),
+        ]:
+            with self.subTest(opd=opd, online=online, prices=(opd_price, online_price)):
+                with self.assertRaisesRegex(frappe.ValidationError, "price is required"):
+                    api.set_appointment_modes(self.doctor.name, self.details()["doctor"]["modified"],
+                        opd, online, opd_price, online_price)
+
+    def test_disabled_consultation_allows_blank_price_and_zero_is_valid(self):
+        for opd, online, opd_price, online_price in [(1, 0, 0, ""), (0, 1, "", 0), (0, 0, "", "")]:
+            details = self.details()["doctor"]
+            result = api.set_appointment_modes(self.doctor.name, details["modified"],
+                opd, online, opd_price, online_price, metrics_modified=details["metrics_modified"])
+            self.assertEqual(result["accepts_opd_appointments"], bool(opd))
+            self.assertEqual(result["accepts_online_appointments"], bool(online))
+
+    def test_enabling_without_saved_price_is_rejected(self):
+        frappe.db.delete("Doctor Directory Settings", {"name": self.doctor.name})
+        modified = self.details()["doctor"]["modified"]
+        for opd, online in [(1, 0), (0, 1), (1, 1)]:
+            with self.assertRaisesRegex(frappe.ValidationError, "price is required"):
+                api.set_appointment_modes(self.doctor.name, modified, opd, online)
+        with self.assertRaisesRegex(frappe.ValidationError, "price is required"):
+            api.set_online_appointments(self.doctor.name, modified, 1)
 
     def test_appointment_modes_save_independently_and_preserve_legacy_links(self):
         from mobile_app.api import practitioners

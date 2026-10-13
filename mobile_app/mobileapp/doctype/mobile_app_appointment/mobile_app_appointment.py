@@ -34,10 +34,12 @@ def sync_child_row_from_standalone(doc: Document) -> None:
 	except frappe.DoesNotExistError:
 		return
 
+	from mobile_app.mobileapp.appointment_sync import stored_values
 	updated = False
 	for row in parent.appointments or []:
 		if row.appointment_external_id != doc.appointment_external_id:
 			continue
+		before = stored_values(row)
 		row.consultation_type = doc.consultation_type
 		row.status = doc.status
 		row.doctor_name = doc.doctor_name
@@ -48,7 +50,7 @@ def sync_child_row_from_standalone(doc: Document) -> None:
 		row.appointment_time = doc.appointment_time
 		row.email_status = doc.email_status
 		row.whatsapp_status = doc.whatsapp_status
-		updated = True
+		updated = stored_values(row) != before
 		break
 
 	if not updated:
@@ -56,6 +58,7 @@ def sync_child_row_from_standalone(doc: Document) -> None:
 
 	frappe.flags.in_appointment_sync_from_user = True
 	try:
+		parent.flags.mobile_app_incremental_sync = True
 		parent.save(ignore_permissions=True)
 	finally:
 		frappe.flags.in_appointment_sync_from_user = False

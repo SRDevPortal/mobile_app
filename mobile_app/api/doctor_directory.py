@@ -310,19 +310,25 @@ def set_appointment_modes(practitioner_id, doctor_modified, opd_enabled, online_
         "custom_accept_opd_appointments": int(opd_enabled),
         "custom_accept_online_appointments": int(online_enabled),
     }
-    for field, label, value in (
-        ("op_consulting_charge", "OPD price", op_consulting_charge),
-        ("custom_online_consulting_charge", "Online price", online_consulting_charge),
+    existing = _directory_values(doc)
+    for field, label, value, enabled in (
+        ("op_consulting_charge", "OPD price", op_consulting_charge, int(opd_enabled)),
+        ("custom_online_consulting_charge", "Online price", online_consulting_charge, int(online_enabled)),
     ):
-        if value is None:
+        # Older callers omit prices: validate the saved price before enabling.
+        effective = existing.get(field) if value is None else value
+        if effective is None or (isinstance(effective, str) and not effective.strip()):
+            if enabled:
+                frappe.throw(f"{label} is required when consultation is enabled.")
             continue
         try:
-            number = float(value)
+            number = float(effective)
         except (TypeError, ValueError):
             frappe.throw(f"{label} must be a valid number.")
         if not isfinite(number) or number < 0:
             frappe.throw(f"{label} must be a finite, non-negative number.")
-        values[field] = number
+        if value is not None:
+            values[field] = number
     prices = {field: values.pop(field) for field in ("op_consulting_charge", "custom_online_consulting_charge") if field in values}
     if prices:
         _save_directory_values(doc, prices, metrics_modified)
@@ -344,12 +350,10 @@ def set_online_appointments(practitioner_id, doctor_modified, enabled):
     doc = _lock_doctor(practitioner_id, doctor_modified)
     if not doc.meta.has_field("custom_accept_online_appointments"):
         frappe.throw("Online appointment settings require the mobile_app migration.")
-    # Only update the checked field, preserving imported profile links.
-    frappe.db.set_value(doc.doctype, doc.name, "custom_accept_online_appointments", int(enabled))
-    frappe.clear_document_cache(doc.doctype, doc.name)
-    doc.reload()
-    doc.notify_update()
-    return {"enabled": bool(int(enabled)), "modified": str(doc.modified)}
+    result = set_appointment_modes(practitioner_id, doctor_modified,
+        int(doc.get("custom_accept_opd_appointments", 1)), enabled)
+    return {"enabled": result["accepts_online_appointments"], "modified": result["modified"]}
+
 
 
 @frappe.whitelist(methods=["POST"])
