@@ -120,10 +120,13 @@ function open_routed_support_ticket_chat(frm) {
 	if (!opts.open_support_ticket_chat) return;
 
 	const ticket_name = opts.support_ticket_name;
+	const ticket_doctype = opts.support_ticket_doctype || "App Support Ticket";
 	delete opts.open_support_ticket_chat;
 	delete opts.support_ticket_name;
+	delete opts.support_ticket_doctype;
 
 	frm._ma_active_ticket_name = ticket_name || null;
+	frm._ma_active_ticket_doctype = ticket_doctype;
 
 	setTimeout(() => {
 		const tab = frm.fields_dict.support_ticket_workspace?.tab;

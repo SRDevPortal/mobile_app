@@ -33,7 +33,8 @@ class TestSupportTicketIntegration(TestCase):
             "ticket": self.ticket.name, "sender_type": "User", "sender_name": "Test",
             "message": "Synthetic question", "timestamp": frappe.utils.now_datetime()}).insert()
         result = api.get_support_tickets(self.user.name)
-        self.assertEqual([row["name"] for row in result["tickets"]], [self.ticket.name])
+        self.assertIn(self.ticket.name, [row["name"] for row in result["tickets"]])
+        result["tickets"] = [row for row in result["tickets"] if row["ticket_doctype"] == "App Support Ticket"]
         self.assertEqual(result["tickets"][0]["unread_count"], 1)
         result = api.send_support_reply(self.user.name, self.ticket.name, "Synthetic reply")
         self.assertEqual(result["ticket"]["unread_count"], 0)
@@ -63,3 +64,67 @@ class TestSupportTicketIntegration(TestCase):
             with self.assertRaises(frappe.AuthenticationError):
                 api.get_support_tickets(self.user.name)
             require_token.assert_called_once()
+
+
+class TestSiyaSupportInbox(TestSupportTicketIntegration):
+    def setUp(self):
+        super().setUp()
+        self.siya = frappe.get_doc({"doctype": "Support Ticket",
+            "user_id": self.user.name, "subject": "Mobile support question",
+            "description": "Delivery&lt;help&gt;<br>Second line", "status": "Open",
+            "priority": "Medium", "category": "Orders"}).insert()
+
+    def test_both_sources_and_two_way_chat_use_original_records(self):
+        question = frappe.get_doc({"doctype": "Support Ticket Message", "ticket": self.siya.name,
+            "sender_type": "User", "sender_id": self.user.name,
+            "message": "<p>Where is my order?</p>", "timestamp": frappe.utils.now_datetime()}).insert()
+        rows = api.get_support_tickets(self.user.name)["tickets"]
+        self.assertEqual({row["ticket_doctype"] for row in rows}, {"Support Ticket", "App Support Ticket"})
+        row = next(row for row in rows if row["ticket_doctype"] == "Support Ticket")
+        self.assertEqual(row["name"], self.siya.name)
+        self.assertEqual(row["description"], "Delivery<help>\nSecond line")
+        self.assertEqual(row["messages"][0]["body"], "Where is my order?")
+        response = api.send_support_reply(self.user.name, self.siya.name, "We are checking your order.", "Support Ticket")
+        self.assertEqual(response["ticket"]["messages"][-1]["from"], "agent")
+        replies = frappe.get_all("Support Ticket Message", filters={"ticket": self.siya.name, "sender_type": "Agent"}, fields=["name", "message", "is_read", "sender_id"])
+        self.assertEqual(len(replies), 1)
+        self.assertEqual(replies[0].message, "We are checking your order.")
+        self.assertEqual(replies[0].sender_id, "Administrator")
+        self.assertEqual(replies[0].is_read, 0)
+        question.reload()
+        self.assertEqual(question.is_read, 1)
+        self.assertFalse(frappe.db.exists("App Support Ticket Message", {"ticket": self.ticket.name}))
+        api.set_support_ticket_status(self.user.name, self.siya.name, "Waiting for Customer", "Support Ticket")
+        self.assertEqual(frappe.db.get_value("Support Ticket", self.siya.name, "status"), "Waiting for Customer")
+        api.set_support_ticket_status(self.user.name, self.siya.name, "Closed", "Support Ticket")
+        with self.assertRaises(frappe.ValidationError):
+            api.send_support_reply(self.user.name, self.siya.name, "Must not send", "Support Ticket")
+
+    def test_normal_erp_auth_reads_inbox_without_separate_app_token(self):
+        with patch.object(api, "_is_desk_session", return_value=False), patch.object(api, "require_app_token", side_effect=AssertionError("No shared token needed")):
+            self.assertEqual(len(api.get_support_tickets(self.user.name)["tickets"]), 2)
+
+    def test_foreign_standard_ticket_and_invalid_source_rejected(self):
+        other = frappe.get_doc({"doctype": "Mobile App User", "external_id": "support-other-" + frappe.generate_hash(length=12)}).insert(ignore_permissions=True)
+        for call in (
+            lambda: api.send_support_reply(other.name, self.siya.name, "Must not send", "Support Ticket"),
+            lambda: api.set_support_ticket_status(other.name, self.siya.name, "Closed", "Support Ticket"),
+            lambda: api.delete_support_ticket(other.name, self.siya.name, "Support Ticket"),
+            lambda: api.send_support_reply(self.user.name, self.siya.name, "Must not send", "Patient"),
+        ):
+            with self.assertRaises(frappe.ValidationError):
+                call()
+        conflicting = frappe._dict(user_id=self.user.name, custom_mobile_app_user=other.name)
+        self.assertFalse(api._ticket_belongs_to_user(conflicting, self.user, "Support Ticket"))
+        self.assertFalse(frappe.db.exists("Support Ticket Message", {"ticket": self.siya.name}))
+
+    def test_record_permission_required_before_reply(self):
+        with patch.object(api, "_get_user_doc", return_value=self.user), patch.object(api, "_require_mobile_app_token"), patch.object(type(self.siya), "check_permission", side_effect=frappe.PermissionError):
+            with self.assertRaises(frappe.PermissionError):
+                api.send_support_reply(self.user.name, self.siya.name, "Forbidden", "Support Ticket")
+        self.assertFalse(frappe.db.exists("Support Ticket Message", {"ticket": self.siya.name}))
+
+    def test_delete_only_selected_source(self):
+        api.delete_support_ticket(self.user.name, self.siya.name, "Support Ticket")
+        self.assertFalse(frappe.db.exists("Support Ticket", self.siya.name))
+        self.assertTrue(frappe.db.exists("App Support Ticket", self.ticket.name))

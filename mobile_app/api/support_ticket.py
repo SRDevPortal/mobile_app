@@ -3,13 +3,44 @@
 from __future__ import annotations
 
 from typing import Any
+from html import unescape
 
 import frappe
 from frappe import _
 from frappe.utils import convert_utc_to_system_timezone, get_datetime, now_datetime
 from mobile_app.api.auth import require_app_token
 
-SUPPORT_TICKET_STATUSES = {"Open", "In Progress", "Resolved", "Closed"}
+SUPPORT_TICKET_STATUSES = {"Open", "In Progress", "Waiting for Customer", "Resolved", "Closed"}
+SOURCES = {
+    "App Support Ticket": ("App Support Ticket Message", "mobile_app_user"),
+    "Support Ticket": ("Support Ticket Message", "custom_mobile_app_user"),
+}
+
+
+def _source(ticket_doctype):
+    if ticket_doctype not in SOURCES:
+        frappe.throw(_("Invalid support ticket type"))
+    return SOURCES[ticket_doctype]
+
+
+def _authenticated():
+    return bool(frappe.session.user and frappe.session.user != "Guest")
+
+
+def _plain(value):
+    return unescape(frappe.utils.strip_html(str(value or "").replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")))
+
+
+def _load_ticket(doc, ticket_name, ticket_doctype, permission="read"):
+    _source(ticket_doctype)
+    if not frappe.db.exists(ticket_doctype, ticket_name):
+        frappe.throw(_("Support ticket not found"))
+    ticket = frappe.get_doc(ticket_doctype, ticket_name)
+    if not _ticket_belongs_to_user(ticket, doc, ticket_doctype):
+        frappe.throw(_("Support ticket not found"))
+    ticket.check_permission(permission)
+    return ticket
+
 
 
 def _is_desk_session() -> bool:
@@ -19,30 +50,34 @@ def _is_desk_session() -> bool:
 
 
 def _require_mobile_app_token() -> None:
-	if _is_desk_session():
+	if _authenticated():
 		return
 	require_app_token()
 
 
-def _ticket_names(doc) -> list[str]:
-	or_filters = [{"mobile_app_user": doc.name}, {"user_id": doc.name}]
-	if doc.external_id and doc.external_id != doc.name:
-		or_filters.append({"user_id": doc.external_id})
-	return frappe.get_all(
-		"App Support Ticket",
-		or_filters=or_filters,
-		order_by="modified desc",
-		pluck="name",
-	)
+def _ticket_names(doc, ticket_doctype):
+    _, link_field = _source(ticket_doctype)
+    has_link = frappe.get_meta(ticket_doctype).has_field(link_field)
+    or_filters = [{"user_id": doc.name}]
+    if has_link:
+        or_filters.append({link_field: doc.name})
+    if doc.external_id and doc.external_id != doc.name:
+        or_filters.append({"user_id": doc.external_id})
+    reader = frappe.get_list if _authenticated() else frappe.get_all
+    rows = reader(ticket_doctype, or_filters=or_filters,
+        fields=["name", "user_id"] + ([link_field] if has_link else []),
+        order_by="modified desc", limit_page_length=0)
+    return [row.name for row in rows if _ticket_belongs_to_user(row, doc, ticket_doctype)]
 
 
-def _messages_by_ticket(ticket_names: list[str]) -> dict[str, list[dict[str, Any]]]:
+def _messages_by_ticket(ticket_names: list[str], ticket_doctype) -> dict[str, list[dict[str, Any]]]:
 	grouped = {name: [] for name in ticket_names}
 	if not ticket_names:
 		return grouped
 
-	for row in frappe.get_all(
-		"App Support Ticket Message",
+	reader = frappe.get_list if _authenticated() else frappe.get_all
+	for row in reader(
+		_source(ticket_doctype)[0],
 		filters={"ticket": ["in", ticket_names]},
 		fields=[
 			"ticket",
@@ -54,15 +89,16 @@ def _messages_by_ticket(ticket_names: list[str]) -> dict[str, list[dict[str, Any
 			"creation",
 			"is_read",
 		],
-		order_by="creation asc",
+		order_by="timestamp asc, creation asc, name asc",
+		limit_page_length=0,
 	):
-		timestamp = _display_timestamp(row)
+		timestamp = _display_timestamp(row) if ticket_doctype == "App Support Ticket" else row.timestamp
 		grouped.setdefault(row.ticket, []).append(
 			{
 				"from": "agent" if row.sender_type == "Agent" else "customer",
 				"sender_id": row.sender_id,
 				"sender_name": row.sender_name,
-				"body": row.message,
+				"body": _plain(row.message) if ticket_doctype == "Support Ticket" else row.message,
 				"timestamp": timestamp,
 				"is_read": int(row.is_read or 0),
 			}
@@ -116,13 +152,26 @@ def _profile_image_url(doc) -> str:
 
 
 def _ticket_rows(doc) -> list[dict[str, Any]]:
-	ticket_names = _ticket_names(doc)
-	messages_by_ticket = _messages_by_ticket(ticket_names)
+    rows = []
+    for ticket_doctype in SOURCES:
+        if not frappe.db.exists("DocType", ticket_doctype):
+            continue
+        if not _authenticated() and ticket_doctype != "App Support Ticket":
+            continue
+        if _authenticated() and not frappe.has_permission(ticket_doctype, "read"):
+            continue
+        rows.extend(_source_rows(doc, ticket_doctype))
+    return sorted(rows, key=lambda row: str(row.get("recorded_at") or ""), reverse=True)
+
+
+def _source_rows(doc, ticket_doctype):
+	ticket_names = _ticket_names(doc, ticket_doctype)
+	messages_by_ticket = _messages_by_ticket(ticket_names, ticket_doctype)
 	profile_image_url = _profile_image_url(doc)
 	tickets = {
 		row.name: row
 		for row in frappe.get_all(
-			"App Support Ticket",
+			ticket_doctype,
 			filters={"name": ["in", ticket_names]},
 			fields=["name", "ticket_number", "subject", "description", "status", "category", "modified", "creation"],
 		)
@@ -132,6 +181,8 @@ def _ticket_rows(doc) -> list[dict[str, Any]]:
 		ticket = tickets.get(name)
 		if not ticket:
 			continue
+		if ticket_doctype == "Support Ticket":
+			ticket.description = _plain(ticket.description)
 		messages = messages_by_ticket.get(name) or []
 		last_message = messages[-1] if messages else {}
 		preview = last_message.get("body") or ticket.description or ticket.subject or ""
@@ -139,6 +190,7 @@ def _ticket_rows(doc) -> list[dict[str, Any]]:
 		rows.append(
 			{
 				"name": ticket.name,
+				"ticket_doctype": ticket_doctype,
 				"external_id": ticket.ticket_number,
 				"subject": ticket.subject or _("Support Ticket"),
 				"description": ticket.description or "",
@@ -159,22 +211,25 @@ def _get_user_doc(mobile_app_user: str):
 	if not mobile_app_user or not frappe.db.exists("Mobile App User", mobile_app_user):
 		frappe.throw(_("Mobile App User not found"))
 	doc = frappe.get_doc("Mobile App User", mobile_app_user)
-	if _is_desk_session():
+	if _authenticated():
 		doc.check_permission("read")
 	return doc
 
 
-def _ticket_belongs_to_user(ticket, doc) -> bool:
-	return bool(
-		ticket.mobile_app_user == doc.name
-		or ticket.user_id == doc.name
-		or (doc.external_id and ticket.user_id == doc.external_id)
-	)
+def _ticket_belongs_to_user(ticket, doc, ticket_doctype="App Support Ticket") -> bool:
+    link = ticket.get(_source(ticket_doctype)[1])
+    identities = {doc.name, doc.external_id} - {None, ""}
+    # An explicit link to another account must never be overridden by user_id.
+    if link:
+        return link == doc.name and (not ticket.get("user_id") or ticket.get("user_id") in identities)
+    return ticket.get("user_id") in identities
 
 
-def _mark_ticket_user_messages_read(ticket_name: str):
+def _mark_ticket_user_messages_read(ticket_name: str, ticket_doctype):
+	message_type = _source(ticket_doctype)[0]
+	frappe.has_permission(message_type, "write", throw=True)
 	unread_messages = frappe.get_all(
-		"App Support Ticket Message",
+		message_type,
 		filters={
 			"ticket": ticket_name,
 			"sender_type": "User",
@@ -188,7 +243,7 @@ def _mark_ticket_user_messages_read(ticket_name: str):
 	now = now_datetime()
 	for message_name in unread_messages:
 		frappe.db.set_value(
-			"App Support Ticket Message",
+			message_type,
 			message_name,
 			{"is_read": 1, "read_at": now},
 			update_modified=False,
@@ -203,73 +258,62 @@ def get_support_tickets(mobile_app_user: str) -> dict[str, Any]:
 
 
 @frappe.whitelist(allow_guest=True)
-def send_support_reply(mobile_app_user: str, ticket_name: str, message: str) -> dict[str, Any]:
+def send_support_reply(mobile_app_user: str, ticket_name: str, message: str, ticket_doctype: str = "App Support Ticket") -> dict[str, Any]:
 	_require_mobile_app_token()
 	message = (message or "").strip()
 	if not message:
 		frappe.throw(_("Message is required"))
 
 	doc = _get_user_doc(mobile_app_user)
-	if not ticket_name or not frappe.db.exists("App Support Ticket", ticket_name):
-		frappe.throw(_("Support ticket not found"))
+	ticket = _load_ticket(doc, ticket_name, ticket_doctype, "write")
 
-	ticket = frappe.get_doc("App Support Ticket", ticket_name)
-	if not _ticket_belongs_to_user(ticket, doc):
-		frappe.throw(_("Support ticket not found"))
-
+	if ticket.status == "Closed":
+		frappe.throw(_("Reopen the ticket before replying."))
+	if len(message) > 10000:
+		frappe.throw(_("Message is too long"))
 	frappe.get_doc(
 		{
-			"doctype": "App Support Ticket Message",
+			"doctype": _source(ticket_doctype)[0],
 			"ticket": ticket.name,
 			"sender_type": "Agent",
 			"sender_id": frappe.session.user,
 			"sender_name": frappe.utils.get_fullname(frappe.session.user) or frappe.session.user,
 			"message": message,
 			"timestamp": now_datetime(),
-			"is_read": 1,
+			"is_read": 0,
 		}
 	).insert()
-	_mark_ticket_user_messages_read(ticket.name)
+	_mark_ticket_user_messages_read(ticket.name, ticket_doctype)
 	ticket.save()
 
-	updated = next((row for row in _ticket_rows(doc) if row["name"] == ticket.name), None)
+	updated = next((row for row in _ticket_rows(doc) if row["name"] == ticket.name and row["ticket_doctype"] == ticket_doctype), None)
 	return {"ticket": updated, "tickets": _ticket_rows(doc)}
 
 
 @frappe.whitelist(allow_guest=True)
-def mark_support_ticket_read(mobile_app_user: str, ticket_name: str) -> dict[str, Any]:
+def mark_support_ticket_read(mobile_app_user: str, ticket_name: str, ticket_doctype: str = "App Support Ticket") -> dict[str, Any]:
 	_require_mobile_app_token()
 	doc = _get_user_doc(mobile_app_user)
-	if not ticket_name or not frappe.db.exists("App Support Ticket", ticket_name):
-		frappe.throw(_("Support ticket not found"))
+	ticket = _load_ticket(doc, ticket_name, ticket_doctype, "write")
 
-	ticket = frappe.get_doc("App Support Ticket", ticket_name)
-	if not _ticket_belongs_to_user(ticket, doc):
-		frappe.throw(_("Support ticket not found"))
+	_mark_ticket_user_messages_read(ticket.name, ticket_doctype)
 
-	_mark_ticket_user_messages_read(ticket.name)
-
-	updated = next((row for row in _ticket_rows(doc) if row["name"] == ticket.name), None)
+	updated = next((row for row in _ticket_rows(doc) if row["name"] == ticket.name and row["ticket_doctype"] == ticket_doctype), None)
 	return {"ticket": updated, "tickets": _ticket_rows(doc)}
 
 
 @frappe.whitelist(allow_guest=True)
-def set_support_ticket_status(mobile_app_user: str, ticket_name: str, status: str) -> dict[str, Any]:
+def set_support_ticket_status(mobile_app_user: str, ticket_name: str, status: str, ticket_doctype: str = "App Support Ticket") -> dict[str, Any]:
 	_require_mobile_app_token()
 	status = (status or "").strip()
 	if status not in SUPPORT_TICKET_STATUSES:
 		frappe.throw(_("Invalid support ticket status"))
 
 	doc = _get_user_doc(mobile_app_user)
-	if not ticket_name or not frappe.db.exists("App Support Ticket", ticket_name):
-		frappe.throw(_("Support ticket not found"))
-
-	ticket = frappe.get_doc("App Support Ticket", ticket_name)
-	if not _ticket_belongs_to_user(ticket, doc):
-		frappe.throw(_("Support ticket not found"))
+	ticket = _load_ticket(doc, ticket_name, ticket_doctype, "write")
 
 	ticket.status = status
-	if status == "In Progress":
+	if status in {"Open", "In Progress", "Waiting for Customer"}:
 		ticket.resolved_at = None
 		ticket.closed_at = None
 	elif status == "Resolved":
@@ -278,28 +322,24 @@ def set_support_ticket_status(mobile_app_user: str, ticket_name: str, status: st
 		ticket.resolved_at = now_datetime()
 	ticket.save()
 
-	updated = next((row for row in _ticket_rows(doc) if row["name"] == ticket.name), None)
+	updated = next((row for row in _ticket_rows(doc) if row["name"] == ticket.name and row["ticket_doctype"] == ticket_doctype), None)
 	return {"ticket": updated, "tickets": _ticket_rows(doc)}
 
 
 @frappe.whitelist(allow_guest=True)
-def delete_support_ticket(mobile_app_user: str, ticket_name: str) -> dict[str, Any]:
+def delete_support_ticket(mobile_app_user: str, ticket_name: str, ticket_doctype: str = "App Support Ticket") -> dict[str, Any]:
 	_require_mobile_app_token()
 	doc = _get_user_doc(mobile_app_user)
-	if not ticket_name or not frappe.db.exists("App Support Ticket", ticket_name):
-		frappe.throw(_("Support ticket not found"))
-
-	ticket = frappe.get_doc("App Support Ticket", ticket_name)
-	if not _ticket_belongs_to_user(ticket, doc):
-		frappe.throw(_("Support ticket not found"))
+	ticket = _load_ticket(doc, ticket_name, ticket_doctype, "write")
 	ticket.check_permission("delete")
+	message_type = _source(ticket_doctype)[0]
 
 	for message_name in frappe.get_all(
-		"App Support Ticket Message",
+		message_type,
 		filters={"ticket": ticket.name},
 		pluck="name",
 	):
-		frappe.delete_doc("App Support Ticket Message", message_name, ignore_permissions=True)
+		frappe.delete_doc(message_type, message_name, ignore_permissions=True)
 
-	frappe.delete_doc("App Support Ticket", ticket.name)
+	frappe.delete_doc(ticket_doctype, ticket.name)
 	return {"tickets": _ticket_rows(doc)}

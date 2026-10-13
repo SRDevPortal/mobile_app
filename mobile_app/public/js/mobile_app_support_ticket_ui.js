@@ -101,11 +101,14 @@ function render_messages($messages, ticket, opts = {}) {
 
 function select_ticket(frm, ticket, opts = {}) {
 	frm._ma_active_ticket_name = ticket?.name;
+	frm._ma_active_ticket_doctype = ticket?.ticket_doctype || "App Support Ticket";
 	const $root = frm._ma_support_inbox;
 	if (!$root?.length) return;
 
 	$root.find(".ma-support-inbox__item").removeClass("is-active");
-	$root.find(`.ma-support-inbox__item[data-ticket="${ticket.name}"]`).addClass("is-active");
+	$root.find(".ma-support-inbox__item").filter((_, node) =>
+		$(node).data("ticket") === ticket.name && $(node).data("ticket-doctype") === frm._ma_active_ticket_doctype
+	).addClass("is-active");
 
 	const $pane = $root.find(".ma-support-inbox__thread-pane");
 	const $title = $root.find(".ma-support-inbox__thread-title");
@@ -162,7 +165,8 @@ function render_ticket_list(frm, tickets, opts = {}) {
 		? mobile_app.clinical_ui.get_patient_display_name(frm)
 		: frm.doc.full_name || frm.docname;
 	tickets.forEach((ticket) => {
-		const $item = $(`<div class="ma-support-inbox__item" data-ticket="${ticket.name}"></div>`);
+		const $item = $('<div class="ma-support-inbox__item"></div>').data("ticket", ticket.name)
+			.data("ticket-doctype", ticket.ticket_doctype || "App Support Ticket");
 		const $avatar = $('<div class="ma-support-inbox__avatar"></div>');
 		if (ticket.profile_image_url) {
 			const $img = $("<img />", {
@@ -203,7 +207,7 @@ function render_ticket_list(frm, tickets, opts = {}) {
 	});
 
 	const active_name = frm._ma_active_ticket_name;
-	const active = tickets.find((t) => t.name === active_name) || (opts.select_first === false ? null : tickets[0]);
+	const active = tickets.find((t) => t.name === active_name && (!frm._ma_active_ticket_doctype || t.ticket_doctype === frm._ma_active_ticket_doctype)) || (opts.select_first === false ? null : tickets[0]);
 	if (active) {
 		select_ticket(frm, active, opts);
 	}
@@ -220,6 +224,7 @@ function refresh_tickets(frm, opts = {}) {
 		args: { mobile_app_user: frm.doc.name },
 		callback(r) {
 			try {
+				$root.find(".ma-support-inbox__load-error").remove();
 				frm._ma_support_tickets = r.message?.tickets || [];
 				update_category_filter_options(frm, frm._ma_support_tickets);
 				apply_ticket_filters(frm, opts);
@@ -229,6 +234,9 @@ function refresh_tickets(frm, opts = {}) {
 		},
 		error() {
 			frm._ma_support_ticket_refreshing = false;
+			if (!$root.find(".ma-support-inbox__load-error").length) {
+				$root.find(".ma-support-inbox__list-pane").prepend($('<div class="ma-support-inbox__load-error text-danger p-3"></div>').text(__("Could not load tickets. Retrying?")));
+			}
 		},
 	});
 }
@@ -256,7 +264,8 @@ function send_reply(frm) {
 	const $input = $root.find(".ma-support-inbox__composer-input");
 	const body = ($input.val() || "").trim();
 	const ticket_name = frm._ma_active_ticket_name;
-	if (body === "" || !ticket_name) return;
+	if (body === "" || !ticket_name || frm._ma_support_sending) return;
+	frm._ma_support_sending = true;
 
 	$root.find(".ma-support-inbox__send-btn").prop("disabled", true);
 	frappe.call({
@@ -264,9 +273,11 @@ function send_reply(frm) {
 		args: {
 			mobile_app_user: frm.doc.name,
 			ticket_name,
+			ticket_doctype: frm._ma_active_ticket_doctype || "App Support Ticket",
 			message: body,
 		},
 		callback(r) {
+			frm._ma_support_sending = false;
 			$root.find(".ma-support-inbox__send-btn").prop("disabled", false);
 			if (!r.message) return;
 			$input.val("");
@@ -275,6 +286,7 @@ function send_reply(frm) {
 			apply_ticket_filters(frm, { preserve_scroll: false });
 		},
 		error() {
+			frm._ma_support_sending = false;
 			$root.find(".ma-support-inbox__send-btn").prop("disabled", false);
 		},
 	});
@@ -291,6 +303,7 @@ function set_ticket_status(frm, status) {
 		args: {
 			mobile_app_user: frm.doc.name,
 			ticket_name,
+			ticket_doctype: frm._ma_active_ticket_doctype || "App Support Ticket",
 			status,
 		},
 		callback(r) {
@@ -322,6 +335,7 @@ function delete_ticket(frm) {
 			args: {
 				mobile_app_user: frm.doc.name,
 				ticket_name,
+				ticket_doctype: frm._ma_active_ticket_doctype || "App Support Ticket",
 			},
 			callback(r) {
 				frm._ma_active_ticket_name = null;
@@ -365,6 +379,7 @@ mobile_app.support_ticket_ui.render_workspace = function (frm) {
 							<option value="__all">${__("All Status")}</option>
 							<option value="Open">${__("Open")}</option>
 							<option value="In Progress">${__("In Progress")}</option>
+							<option value="Waiting for Customer">${__("Waiting for Customer")}</option>
 							<option value="Resolved">${__("Resolved")}</option>
 							<option value="Closed">${__("Closed")}</option>
 						</select>

@@ -52,6 +52,7 @@ app_include_js = [
 # app_include_js = "/assets/mobile_app/js/mobile_app.js"
 
 doctype_js = {
+    "Support Ticket": "public/js/support_ticket.js",
     "Diet Chart": "public/js/diet_chart.js",
 	"Mobile App User": [
 		"public/js/mobile_app_clinical_ui.js",
