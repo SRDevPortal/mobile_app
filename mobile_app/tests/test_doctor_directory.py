@@ -29,6 +29,33 @@ class TestDoctorDirectory(unittest.TestCase):
     def details(self):
         return api.get_doctor(self.doctor.name, self.date)
 
+    def test_profile_metrics_persist_and_reject_stale_updates(self):
+        modified = self.details()["doctor"]["modified"]
+        result = api.set_profile_metrics(self.doctor.name, modified, 499, 299, 12.5, 4.8)
+        self.assertEqual(result["op_consulting_charge"], 499)
+        self.assertEqual(result["online_consulting_charge"], 299)
+        self.assertEqual(result["experience_years"], 12.5)
+        self.assertEqual(result["doctor_rating"], 4.8)
+        self.doctor.reload()
+        self.assertEqual(self.doctor.custom_online_consulting_charge, 299)
+        with self.assertRaises(frappe.TimestampMismatchError):
+            api.set_profile_metrics(self.doctor.name, modified, 1, 1, 1, 1)
+        result = api.set_profile_metrics(self.doctor.name, result["modified"], 0, 0, 0, 0)
+        self.assertEqual(result["doctor_rating"], 0)
+
+    def test_profile_metrics_validate_numbers(self):
+        for values in [(-1, 299, 10, 4), (499, -1, 10, 4), (499, 299, -1, 4),
+                       (499, 299, 10, 5.1), (499, 299, 10, -1),
+                       ("invalid", 299, 10, 4), (499, "nan", 10, 4), (499, 299, "inf", 4)]:
+            with self.subTest(values=values), self.assertRaises(frappe.ValidationError):
+                api.set_profile_metrics(self.doctor.name, str(self.doctor.modified), *values)
+
+    def test_profile_metrics_require_write_permission(self):
+        with patch.object(api, "_practitioner", return_value=self.doctor), \
+             patch.object(self.doctor, "check_permission", side_effect=frappe.PermissionError):
+            with self.assertRaises(frappe.PermissionError):
+                api.set_profile_metrics(self.doctor.name, str(self.doctor.modified), 499, 299, 10, 4)
+
     def weekly(self, rows=None):
         data = self.details()
         schedule = data["schedules"][0] if data["schedules"] else {}

@@ -41,8 +41,18 @@ def setup_practitioner_diseases():
         }]
     }, ignore_validate=True)
 
+    create_custom_fields({"Healthcare Practitioner": [
+        {"fieldname": "custom_online_consulting_charge", "label": "Online Consulting Charge",
+         "fieldtype": "Currency", "insert_after": "op_consulting_charge", "non_negative": 1, "module": "MobileApp"},
+        {"fieldname": "custom_experience_years", "label": "Experience (years)",
+         "fieldtype": "Float", "insert_after": "custom_about_doctor", "non_negative": 1, "module": "MobileApp"},
+        {"fieldname": "custom_doctor_rating", "label": "Doctor Rating (0–5)",
+         "fieldtype": "Float", "insert_after": "custom_experience_years", "non_negative": 1,
+         "description": "Manually managed doctor rating, from 0 to 5.", "module": "MobileApp"},
+    ]}, ignore_validate=True)
+
     # Retain existing layout customizations while grouping these profile fields.
-    profile_fields = ["sr_diseases", "custom_about_doctor"]
+    profile_fields = ["sr_diseases", "custom_about_doctor", "custom_experience_years", "custom_doctor_rating"]
     fields = [field.fieldname for field in frappe.get_meta("Healthcare Practitioner").fields
               if field.fieldname not in profile_fields]
     position = fields.index("gender") + 1

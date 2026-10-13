@@ -388,6 +388,14 @@ body.ma-calendar-active .container.page-body {max-width:none;padding:0}
 .dd-status {font-size:12px;font-weight:600;background:#e5f6eb;color:#17603e;padding:6px 12px}
 .dd-contact {font-size:12px;margin:18px 0 0;padding:16px 0 0;border-bottom:0;border-top:1px solid var(--ac-border)}
 .dd-summary {display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:18px;margin-bottom:18px}
+.dd-summary .ac-btn {max-width:100%;white-space:normal}
+.dd-appointment-settings {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-bottom:18px}
+.dd-appointment-card {padding:18px;border:1px solid var(--ac-border);border-radius:12px;background:#fff;min-width:0}
+.dd-appointment-card:has(.dd-appointment-toggle input:checked) {border-color:var(--ac-brand);background:#eaf7f0}
+.dd-appointment-toggle {display:flex;align-items:center;gap:9px;font-size:15px;font-weight:600;cursor:pointer;margin:0 0 8px}
+.dd-appointment-card .dd-price-label {display:block;font-size:13px;margin:16px 0 8px}
+.dd-appointment-card .form-control {width:100%;background:#fff}
+@media(max-width:650px){.dd-appointment-settings{grid-template-columns:1fr}}
 .dd-about,.dd-charges {padding:20px;margin:0;min-width:0}
 .dd-about-text {font-size:13px;line-height:1.8}
 .dd-about-heading {margin-bottom:14px}

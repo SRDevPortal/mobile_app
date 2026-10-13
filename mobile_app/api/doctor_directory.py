@@ -1,6 +1,7 @@
 """Permission-checked doctor directory and calendar schedule editing."""
 from datetime import timedelta
 from html import unescape
+from math import isfinite
 
 import frappe
 from frappe.utils import flt, getdate, get_system_timezone, now_datetime
@@ -28,6 +29,9 @@ def _details(doc):
             "image": doc.get("image") or "",
             "diseases": diseases, "about_doctor": doc.get("custom_about_doctor") or "",
             "op_consulting_charge": flt(doc.get("op_consulting_charge")),
+            "online_consulting_charge": flt(doc.get("custom_online_consulting_charge")),
+            "experience_years": flt(doc.get("custom_experience_years")),
+            "doctor_rating": flt(doc.get("custom_doctor_rating")),
             "inpatient_visit_charge": flt(doc.get("inpatient_visit_charge")),
             "accepts_online_appointments": bool(frappe.utils.cint(doc.get("custom_accept_online_appointments"))),
             "accepts_opd_appointments": bool(frappe.utils.cint(doc.get("custom_accept_opd_appointments", 1))),
@@ -43,6 +47,36 @@ def list_doctors():
         "Healthcare Practitioner", filters={"status": "Active"}, fields=["name"],
         order_by="practitioner_name asc", limit_page_length=0)],
         "timezone": get_system_timezone()}
+
+
+@frappe.whitelist(methods=["POST"])
+def set_profile_metrics(practitioner_id, doctor_modified, op_consulting_charge,
+                        online_consulting_charge, experience_years, doctor_rating):
+    values = {}
+    for field, label, value in (
+        ("op_consulting_charge", "OPD price", op_consulting_charge),
+        ("custom_online_consulting_charge", "Online price", online_consulting_charge),
+        ("custom_experience_years", "Experience", experience_years),
+        ("custom_doctor_rating", "Rating", doctor_rating),
+    ):
+        try:
+            number = float(value)
+        except (ValueError, TypeError):
+            frappe.throw(f"{label} must be a valid number.")
+        if not isfinite(number) or number < 0:
+            frappe.throw(f"{label} must be a finite, non-negative number.")
+        if field == "custom_doctor_rating" and number > 5:
+            frappe.throw("Rating must be between 0 and 5.")
+        values[field] = number
+    doc = _lock_doctor(practitioner_id, doctor_modified)
+    if any(not doc.meta.has_field(field) for field in values):
+        frappe.throw("Doctor profile settings require the mobile_app migration.")
+    # Update only these validated fields, preserving unrelated imported links.
+    frappe.db.set_value(doc.doctype, doc.name, values)
+    frappe.clear_document_cache(doc.doctype, doc.name)
+    doc.reload()
+    doc.notify_update()
+    return _details(doc)
 
 
 @frappe.whitelist()
@@ -255,7 +289,8 @@ def save_leave_range(practitioner_id, doctor_modified, start_date, end_date, exp
 
 
 @frappe.whitelist(methods=["POST"])
-def set_appointment_modes(practitioner_id, doctor_modified, opd_enabled, online_enabled):
+def set_appointment_modes(practitioner_id, doctor_modified, opd_enabled, online_enabled,
+                          op_consulting_charge=None, online_consulting_charge=None):
     if any(str(value) not in {"0", "1"} for value in (opd_enabled, online_enabled)):
         frappe.throw("Choose enabled or disabled for OPD and online appointments.")
     doc = _lock_doctor(practitioner_id, doctor_modified)
@@ -263,6 +298,19 @@ def set_appointment_modes(practitioner_id, doctor_modified, opd_enabled, online_
         "custom_accept_opd_appointments": int(opd_enabled),
         "custom_accept_online_appointments": int(online_enabled),
     }
+    for field, label, value in (
+        ("op_consulting_charge", "OPD price", op_consulting_charge),
+        ("custom_online_consulting_charge", "Online price", online_consulting_charge),
+    ):
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            frappe.throw(f"{label} must be a valid number.")
+        if not isfinite(number) or number < 0:
+            frappe.throw(f"{label} must be a finite, non-negative number.")
+        values[field] = number
     if any(not doc.meta.has_field(field) for field in values):
         frappe.throw("Appointment settings require the mobile_app migration.")
     # Save both choices together without revalidating unrelated imported links.

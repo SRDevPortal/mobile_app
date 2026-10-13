@@ -127,21 +127,33 @@ frappe.provide("mobile_app");
                         ${d.can_edit ? '<button class="ac-btn" data-dd="edit-about">Edit About Doctor</button>' : ""}</div>
                     <p class="dd-about-text" ${d.about_doctor ? "" : 'data-empty="true"'}>${esc(d.about_doctor || "No information added yet.")}</p>
                 </section>
-                <section class="dd-charges" aria-labelledby="dd-charges-title">
-                    <h3 id="dd-charges-title">Charges</h3>
+                <section class="dd-about" aria-labelledby="dd-experience-title">
+                    <h3 id="dd-experience-title">Experience &amp; rating</h3>
                     <dl class="dd-charge-list">
-                        <div><dt>Out Patient Consulting Charge</dt><dd data-charge="outpatient">${esc(format_currency(d.op_consulting_charge, undefined, 2))}</dd></div>
+                        <div><dt>Experience</dt><dd data-metric="experience">${esc(d.experience_years)} years</dd></div>
+                        <div><dt>Rating</dt><dd data-metric="rating">${esc(d.doctor_rating)} / 5</dd></div>
                     </dl>
+                    ${d.can_edit ? '<button class="ac-btn" data-dd="edit-metrics">Edit experience &amp; rating</button>' : ""}
                 </section>
                 </div>
                 <fieldset class="dd-online-setting" ${d.can_edit ? "" : "disabled"}>
-                    <legend style="font-size:16px">Appointment types</legend>
-                    <div class="dd-appointment-choices">
-                        <label><input type="checkbox" class="dd-opd-enabled" ${d.accepts_opd_appointments ? "checked" : ""}> OPD (in-person)</label>
-                        <label><input type="checkbox" class="dd-online-enabled" ${d.accepts_online_appointments ? "checked" : ""}> Online</label>
+                    <legend style="font-size:16px">Appointment types, prices &amp; availability</legend>
+                    <p class="dd-note">Enable OPD, Online, or both, and set the charge for each consultation.</p>
+                    <div class="dd-appointment-settings">
+                        <section class="dd-appointment-card" aria-label="OPD appointment settings">
+                            <label class="dd-appointment-toggle"><input type="checkbox" class="dd-opd-enabled" ${d.accepts_opd_appointments ? "checked" : ""}> OPD (in-person)</label>
+                            <p class="dd-note">Allow in-person appointments.</p>
+                            <label class="dd-price-label" for="dd-opd-price">OPD consultation charge</label>
+                            <input id="dd-opd-price" class="form-control" type="number" min="0" step="0.01" required value="${esc(d.op_consulting_charge)}">
+                        </section>
+                        <section class="dd-appointment-card" aria-label="Online appointment settings">
+                            <label class="dd-appointment-toggle"><input type="checkbox" class="dd-online-enabled" ${d.accepts_online_appointments ? "checked" : ""}> Online</label>
+                            <p class="dd-note">Allow online consultations in the mobile app.</p>
+                            <label class="dd-price-label" for="dd-online-price">Online consultation charge</label>
+                            <input id="dd-online-price" class="form-control" type="number" min="0" step="0.01" required value="${esc(d.online_consulting_charge)}">
+                        </section>
                     </div>
-                    <p class="dd-note">Select OPD, Online, or both. Online enables consultations in the mobile app.</p>
-                    <button class="ac-btn ac-primary" data-dd="save-appointment-modes">Save appointment types</button>
+                    <button class="ac-btn ac-primary" data-dd="save-appointment-modes">Save appointment settings</button>
                     <div class="dd-online-error" role="alert"></div>
                 </fieldset>
                 <div class="dd-mode" role="group" aria-label="Availability editing mode">
@@ -282,6 +294,7 @@ frappe.provide("mobile_app");
         action(action) {
             if (this.saving) return;
             if (action === "edit-about") return this.editAbout();
+            if (action === "edit-metrics") return this.editMetrics();
             if (action === "save-appointment-modes") return this.leaveDraft(() => this.saveAppointmentModes());
             if (action === "refresh") return this.leaveDraft(() => this.refresh());
             if (action === "profile") return this.leaveDraft(() => frappe.set_route("Form", "Healthcare Practitioner", this.selected));
@@ -293,6 +306,54 @@ frappe.provide("mobile_app");
             if (action === "remove-leave") return this.saveLeave(true);
             if (action === "reset") return this.leaveDraft(() => this.load());
             if (action === "save") return this.save();
+        }
+        editMetrics() {
+            const doctor = this.data.doctor;
+            if (!doctor.can_edit) return;
+            const dialog = new frappe.ui.Dialog({
+                title: "Doctor experience & rating",
+                fields: [
+                    {fieldname: "experience_years", label: "Experience (years)", fieldtype: "Float", default: doctor.experience_years, reqd: 1},
+                    {fieldname: "doctor_rating", label: "Rating (0–5)", fieldtype: "Float", default: doctor.doctor_rating, reqd: 1,
+                        description: "Manually managed rating from 0 to 5."},
+                    {fieldname: "save_error", fieldtype: "HTML", options: '<div role="alert" class="text-danger"></div>'}
+                ],
+                primary_action_label: "Save",
+                primary_action: async values => {
+                    if (this.saving) return;
+                    const $error = dialog.fields_dict.save_error.$wrapper.find('[role="alert"]');
+                    const fields = ['experience_years', 'doctor_rating'];
+                    if (fields.some(field => !Number.isFinite(Number(values[field])) || Number(values[field]) < 0) || Number(values.doctor_rating) > 5) {
+                        $error.text("Enter non-negative experience and a rating between 0 and 5.");
+                        return;
+                    }
+                    this.saving = true;
+                    $error.text("");
+                    dialog.get_primary_btn().prop("disabled", true);
+                    try {
+                        const result = await frappe.xcall(`${API}.set_profile_metrics`, {
+                            practitioner_id: doctor.id, doctor_modified: doctor.modified,
+                            op_consulting_charge: doctor.op_consulting_charge, online_consulting_charge: doctor.online_consulting_charge,
+                            ...Object.fromEntries(fields.map(field => [field, values[field]]))
+                        });
+                        Object.assign(doctor, result);
+                        const listed = this.doctors.find(item => item.id === doctor.id);
+                        if (listed) Object.assign(listed, result);
+                        if (this.data.doctor.id === doctor.id) {
+                            this.$root.find('[data-metric="experience"]').text(`${result.experience_years} years`);
+                            this.$root.find('[data-metric="rating"]').text(`${result.doctor_rating} / 5`);
+                        }
+                        dialog.hide();
+                        frappe.show_alert({message: "Doctor experience and rating saved", indicator: "green"});
+                    } catch (e) {
+                        $error.text("Changes were not saved. Review the error, or refresh doctor details if they changed, then try again.");
+                    } finally {
+                        this.saving = false;
+                        dialog.get_primary_btn().prop("disabled", false);
+                    }
+                }
+            });
+            dialog.show();
         }
         editAbout() {
             const doctor = this.data.doctor;
@@ -336,6 +397,10 @@ frappe.provide("mobile_app");
         }
         async saveAppointmentModes() {
             if (this.saving || !this.data.doctor.can_edit) return;
+            const prices = this.$root.find('#dd-opd-price, #dd-online-price').toArray();
+            if (!prices.every(input => input.reportValidity())) return;
+            const opdPrice = this.$root.find('#dd-opd-price').val();
+            const onlinePrice = this.$root.find('#dd-online-price').val();
             const onlineEnabled = this.$root.find('.dd-online-enabled').prop('checked');
             const opdEnabled = this.$root.find('.dd-opd-enabled').prop('checked');
             this.saving = true;
@@ -343,12 +408,13 @@ frappe.provide("mobile_app");
             try {
                 await frappe.xcall(`${API}.set_appointment_modes`, {
                     practitioner_id: this.selected, doctor_modified: this.data.doctor.modified,
-                    opd_enabled: opdEnabled ? 1 : 0, online_enabled: onlineEnabled ? 1 : 0
+                    opd_enabled: opdEnabled ? 1 : 0, online_enabled: onlineEnabled ? 1 : 0,
+                    op_consulting_charge: opdPrice, online_consulting_charge: onlinePrice
                 });
                 await this.load();
-                frappe.show_alert({message: 'Appointment types saved', indicator: 'green'});
+                frappe.show_alert({message: 'Appointment settings saved', indicator: 'green'});
             } catch (e) {
-                this.$root.find('.dd-online-error').text('Appointment types were not saved. Refresh doctor details and try again.');
+                this.$root.find('.dd-online-error').text('Appointment settings were not saved. Refresh doctor details and try again.');
             } finally {
                 this.saving = false;
                 this.$root.find('.dd-online-setting').prop('disabled', !this.data.doctor.can_edit);
