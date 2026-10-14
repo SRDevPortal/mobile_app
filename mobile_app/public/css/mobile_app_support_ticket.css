@@ -511,3 +511,12 @@
 		border-bottom: 1px solid #e5eaf0;
 	}
 }
+
+/* The central inbox replaces the standard list controls and empty state. */
+.ma-central-support .page-form,
+.ma-central-support .no-result,
+.ma-central-support .list-paging-area,
+.ma-central-support .layout-side-section {
+    display: none !important;
+}
+.ma-central-support .app-support-conversations { padding: 12px; }

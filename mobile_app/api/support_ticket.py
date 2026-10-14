@@ -138,7 +138,7 @@ def _unanswered_user_message_count(messages: list[dict[str, Any]]) -> int:
 	return sum(
 		1
 		for message in messages[last_agent_index + 1 :]
-		if message.get("from") == "customer"
+		if message.get("from") == "customer" and not message.get("is_read")
 	)
 
 
@@ -164,8 +164,9 @@ def _ticket_rows(doc) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda row: str(row.get("recorded_at") or ""), reverse=True)
 
 
-def _source_rows(doc, ticket_doctype):
-	ticket_names = _ticket_names(doc, ticket_doctype)
+def _source_rows(doc, ticket_doctype, ticket_names=None):
+	if ticket_names is None:
+		ticket_names = _ticket_names(doc, ticket_doctype)
 	messages_by_ticket = _messages_by_ticket(ticket_names, ticket_doctype)
 	profile_image_url = _profile_image_url(doc)
 	tickets = {
@@ -249,6 +250,8 @@ def _mark_ticket_user_messages_read(ticket_name: str, ticket_doctype):
 			update_modified=False,
 		)
 
+	frappe.publish_realtime("mobile_app_data_changed", {"doctype": message_type}, room="all", after_commit=True)
+
 
 @frappe.whitelist(allow_guest=True)
 def get_support_tickets(mobile_app_user: str) -> dict[str, Any]:
@@ -284,7 +287,7 @@ def send_support_reply(mobile_app_user: str, ticket_name: str, message: str, tic
 		}
 	).insert()
 	_mark_ticket_user_messages_read(ticket.name, ticket_doctype)
-	ticket.save()
+	# Message insertion updates ticket activity; avoid saving the stale document.
 
 	updated = next((row for row in _ticket_rows(doc) if row["name"] == ticket.name and row["ticket_doctype"] == ticket_doctype), None)
 	return {"ticket": updated, "tickets": _ticket_rows(doc)}
@@ -343,3 +346,98 @@ def delete_support_ticket(mobile_app_user: str, ticket_name: str, ticket_doctype
 
 	frappe.delete_doc(ticket_doctype, ticket.name)
 	return {"tickets": _ticket_rows(doc)}
+
+
+@frappe.whitelist()
+def get_desk_support_inbox(start=0, status=None, search=None, ticket_name=None, ticket_doctype=None, category=None):
+    """Bounded, permission-scoped inbox for both existing ticket integrations."""
+    if not _authenticated():
+        frappe.throw(_("Login required"), frappe.PermissionError)
+    if ticket_name:
+        _source(ticket_doctype)
+    start = max(0, frappe.utils.cint(start))
+    if start > 10000:
+        frappe.throw(_("Narrow your search to see more tickets."))
+    page_size = 20
+    candidates = []
+    categories = set()
+    for doctype, (message_doctype, link_field) in SOURCES.items():
+        if ticket_name and doctype != ticket_doctype:
+            continue
+        if not frappe.db.exists("DocType", doctype) or not frappe.has_permission(doctype, "read"):
+            continue
+        fields = ["name", "user_id", "modified"]
+        if frappe.get_meta(doctype).has_field(link_field):
+            fields.append(link_field)
+        filters = {"status": status} if status and status != "__all" else {}
+        if ticket_name:
+            filters["name"] = ticket_name
+        or_filters = None
+        if search and not ticket_name:
+            value = "%" + str(search).strip()[:100] + "%"
+            or_filters = {field: ["like", value] for field in ("name", "subject", "user_id", "user_name")}
+        # Collect options across matching tickets, before category filtering or paging.
+        for option in frappe.get_list(doctype, fields=["category"], filters=filters,
+                or_filters=or_filters, group_by="category", order_by="category asc", limit_page_length=0):
+            if option.category:
+                categories.add(option.category)
+        if category and category != "__all":
+            filters["category"] = category
+        for row in frappe.get_list(doctype, fields=fields, filters=filters, or_filters=or_filters,
+                order_by="modified desc, name desc", limit_page_length=start + page_size + 1):
+            row.ticket_doctype = doctype
+            row.linked_user = row.get(link_field)
+            candidates.append(row)
+    candidates.sort(key=lambda row: (str(row.modified), row.ticket_doctype, row.name), reverse=True)
+    page = candidates[start:start + page_size]
+    groups = {}
+    for row in page:
+        # A ticket permission does not grant access to the linked patient profile.
+        name = row.linked_user or frappe.db.get_value("Mobile App User", row.user_id, "name")
+        if not name:
+            name = frappe.db.get_value("Mobile App User", {"external_id": row.user_id}, "name")
+        if not name:
+            continue
+        key = (name, row.ticket_doctype)
+        groups.setdefault(key, []).append(row.name)
+    tickets = []
+    for (name, doctype), names in groups.items():
+        try:
+            user = _get_user_doc(name)
+        except frappe.PermissionError:
+            continue
+        allowed = [name for name in names if _ticket_belongs_to_user(frappe.get_doc(doctype, name), user, doctype)]
+        for ticket in _source_rows(user, doctype, allowed):
+            ticket["mobile_app_user"] = user.name
+            ticket["user_name"] = user.full_name or user.name
+            ticket["can_mark_read"] = bool(frappe.has_permission(doctype, "write", doc=frappe.get_doc(doctype, ticket["name"])) and frappe.has_permission(_source(doctype)[0], "write"))
+            tickets.append(ticket)
+    order = {(row.ticket_doctype, row.name): index for index, row in enumerate(page)}
+    tickets.sort(key=lambda ticket: order[(ticket["ticket_doctype"], ticket["name"])])
+    return {"tickets": tickets, "has_more": len(candidates) > start + page_size,
+            "start": start, "categories": sorted(categories)}
+
+
+@frappe.whitelist()
+def get_support_ticket_message_counts(ticket_names):
+    """Unread customer-message counts for visible, permitted Support Ticket rows."""
+    names = frappe.parse_json(ticket_names) if isinstance(ticket_names, str) else ticket_names
+    if not isinstance(names, list) or len(names) > 200 or any(not isinstance(n, str) for n in names):
+        frappe.throw(_("Choose up to 200 tickets."))
+    if not _authenticated():
+        frappe.throw(_("Login required"), frappe.PermissionError)
+    frappe.has_permission("Support Ticket", "read", throw=True)
+    frappe.has_permission("Support Ticket Message", "read", throw=True)
+    if not names:
+        return {}
+    allowed = frappe.get_list("Support Ticket", filters={"name": ["in", names]},
+                              pluck="name", limit_page_length=len(names))
+    if not allowed:
+        return {}
+    counts = {name: 0 for name in allowed}
+    for row in frappe.get_list("Support Ticket Message",
+            filters={"ticket": ["in", allowed], "sender_type": "User", "is_read": 0},
+            fields=["ticket", "count(name) as unread_count"], group_by="ticket",
+            limit_page_length=len(allowed)):
+        counts[row.ticket] = row.unread_count
+    return counts

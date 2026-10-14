@@ -1,4 +1,4 @@
-/* Support Ticket inbox tab — Mobile App User */
+/* Shared support conversation UI, mounted on the App Support Ticket list. */
 
 frappe.provide("mobile_app.support_ticket_ui");
 
@@ -47,7 +47,10 @@ function update_category_filter_options(frm, tickets) {
 	if (!$category.length) return;
 
 	const current = $category.val() || "__all";
-	const categories = [...new Set(tickets.map((ticket) => ticket.label).filter(Boolean))].sort();
+	const values = frm._ma_global_inbox && frm._ma_support_categories
+		? frm._ma_support_categories : tickets.map((ticket) => ticket.label);
+	// Keep a chosen category selected even when the search has no matches.
+	const categories = [...new Set([...values, ...(frm._ma_global_inbox && current !== "__all" ? [current] : [])].filter(Boolean))].sort();
 	$category.empty().append($("<option></option>").val("__all").text(__("All Categories")));
 	categories.forEach((category) => {
 		$category.append($("<option></option>").val(category).text(category));
@@ -99,7 +102,30 @@ function render_messages($messages, ticket, opts = {}) {
 	}
 }
 
+function mark_ticket_seen(frm, ticket) {
+    if (!frm._ma_global_inbox || !ticket.can_mark_read || !ticket.unread_count) return;
+    const key = `${ticket.ticket_doctype}:${ticket.name}`;
+    frm._ma_reading = frm._ma_reading || new Set();
+    if (frm._ma_reading.has(key)) return;
+    frm._ma_reading.add(key);
+    frappe.call({
+        method: "mobile_app.api.support_ticket.mark_support_ticket_read",
+        args: {mobile_app_user: ticket.mobile_app_user, ticket_name: ticket.name, ticket_doctype: ticket.ticket_doctype},
+        callback() {
+            ticket.unread_count = 0;
+            frm._ma_support_inbox.find(".ma-support-inbox__item").filter((_, node) =>
+                $(node).data("ticket") === ticket.name && $(node).data("ticket-doctype") === ticket.ticket_doctype
+            ).find(".ma-support-inbox__unread-badge").remove();
+            frm._ma_reading.delete(key);
+        },
+        error() { frm._ma_reading.delete(key); }
+    });
+}
+
 function select_ticket(frm, ticket, opts = {}) {
+	if (frm._ma_support_sending) return;
+	if (frm._ma_active_ticket_name !== ticket?.name || frm._ma_active_ticket_doctype !== ticket?.ticket_doctype) opts = {...opts, preserve_composer: false};
+	frm._ma_active_ticket_user = ticket?.mobile_app_user || frm.doc.name;
 	frm._ma_active_ticket_name = ticket?.name;
 	frm._ma_active_ticket_doctype = ticket?.ticket_doctype || "App Support Ticket";
 	const $root = frm._ma_support_inbox;
@@ -131,6 +157,7 @@ function select_ticket(frm, ticket, opts = {}) {
 	}
 	$input.prop("disabled", is_closed);
 	$root.find(".ma-support-inbox__send-btn").prop("disabled", is_closed);
+	mark_ticket_seen(frm, ticket);
 }
 
 function render_ticket_list(frm, tickets, opts = {}) {
@@ -161,10 +188,11 @@ function render_ticket_list(frm, tickets, opts = {}) {
 		return;
 	}
 
-	const patient = mobile_app.clinical_ui?.get_patient_display_name
+	const profile_patient = mobile_app.clinical_ui?.get_patient_display_name
 		? mobile_app.clinical_ui.get_patient_display_name(frm)
 		: frm.doc.full_name || frm.docname;
 	tickets.forEach((ticket) => {
+		const patient = ticket.user_name || profile_patient;
 		const $item = $('<div class="ma-support-inbox__item"></div>').data("ticket", ticket.name)
 			.data("ticket-doctype", ticket.ticket_doctype || "App Support Ticket");
 		const $avatar = $('<div class="ma-support-inbox__avatar"></div>');
@@ -214,22 +242,26 @@ function render_ticket_list(frm, tickets, opts = {}) {
 }
 
 function refresh_tickets(frm, opts = {}) {
-	if (frm.is_new() || frm._ma_support_ticket_refreshing) return;
+	if (frm.is_new() || frm._ma_support_sending) return;
+	if (frm._ma_support_ticket_refreshing) { frm._ma_refresh_again = true; return; }
 	const $root = frm._ma_support_inbox;
 	if (!$root?.length || !document.body.contains($root[0])) return;
 
 	frm._ma_support_ticket_refreshing = true;
 	frappe.call({
-		method: "mobile_app.api.support_ticket.get_support_tickets",
-		args: { mobile_app_user: frm.doc.name },
+		method: frm._ma_global_inbox ? "mobile_app.api.support_ticket.get_desk_support_inbox" : "mobile_app.api.support_ticket.get_support_tickets",
+		args: frm._ma_global_inbox ? {start: frm._ma_start || 0, status: frm._ma_support_ticket_filters?.status, category: frm._ma_support_ticket_filters?.category, search: frm._ma_search || "", ticket_name: frm._ma_ticket_name || null, ticket_doctype: frm._ma_ticket_doctype || null} : { mobile_app_user: frm.doc.name },
 		callback(r) {
 			try {
 				$root.find(".ma-support-inbox__load-error").remove();
+				frm._ma_page_update?.(r.message);
 				frm._ma_support_tickets = r.message?.tickets || [];
+				frm._ma_support_categories = r.message?.categories;
 				update_category_filter_options(frm, frm._ma_support_tickets);
 				apply_ticket_filters(frm, opts);
 			} finally {
 				frm._ma_support_ticket_refreshing = false;
+				if (frm._ma_refresh_again) { frm._ma_refresh_again = false; refresh_tickets(frm, opts); }
 			}
 		},
 		error() {
@@ -252,6 +284,7 @@ function start_ticket_refresh(frm) {
 			frm._ma_support_ticket_refresh_timer = null;
 			return;
 		}
+		if (document.hidden || !$root.is(":visible")) return;
 		refresh_tickets(frm, {
 			preserve_composer: true,
 			preserve_scroll: true,
@@ -271,7 +304,7 @@ function send_reply(frm) {
 	frappe.call({
 		method: "mobile_app.api.support_ticket.send_support_reply",
 		args: {
-			mobile_app_user: frm.doc.name,
+			mobile_app_user: frm._ma_active_ticket_user || frm.doc.name,
 			ticket_name,
 			ticket_doctype: frm._ma_active_ticket_doctype || "App Support Ticket",
 			message: body,
@@ -281,6 +314,7 @@ function send_reply(frm) {
 			$root.find(".ma-support-inbox__send-btn").prop("disabled", false);
 			if (!r.message) return;
 			$input.val("");
+			if (frm._ma_global_inbox) return refresh_tickets(frm, {preserve_composer: true});
 			frm._ma_support_tickets = r.message?.tickets || [];
 			update_category_filter_options(frm, frm._ma_support_tickets);
 			apply_ticket_filters(frm, { preserve_scroll: false });
@@ -301,7 +335,7 @@ function set_ticket_status(frm, status) {
 	frappe.call({
 		method: "mobile_app.api.support_ticket.set_support_ticket_status",
 		args: {
-			mobile_app_user: frm.doc.name,
+			mobile_app_user: frm._ma_active_ticket_user || frm.doc.name,
 			ticket_name,
 			ticket_doctype: frm._ma_active_ticket_doctype || "App Support Ticket",
 			status,
@@ -309,6 +343,7 @@ function set_ticket_status(frm, status) {
 		callback(r) {
 			$root.find(".ma-support-inbox__status-btn").prop("disabled", false);
 			if (!r.message) return;
+			if (frm._ma_global_inbox) return refresh_tickets(frm, {preserve_composer: true});
 			frm._ma_support_tickets = r.message?.tickets || [];
 			update_category_filter_options(frm, frm._ma_support_tickets);
 			apply_ticket_filters(frm, {
@@ -333,12 +368,16 @@ function delete_ticket(frm) {
 		frappe.call({
 			method: "mobile_app.api.support_ticket.delete_support_ticket",
 			args: {
-				mobile_app_user: frm.doc.name,
+				mobile_app_user: frm._ma_active_ticket_user || frm.doc.name,
 				ticket_name,
 				ticket_doctype: frm._ma_active_ticket_doctype || "App Support Ticket",
 			},
 			callback(r) {
 				frm._ma_active_ticket_name = null;
+				if (frm._ma_global_inbox) {
+					$root.find(".ma-support-inbox__delete-btn").prop("disabled", false);
+					return refresh_tickets(frm);
+				}
 				frm._ma_support_tickets = r.message?.tickets || [];
 				update_category_filter_options(frm, frm._ma_support_tickets);
 				apply_ticket_filters(frm);
@@ -356,7 +395,7 @@ mobile_app.support_ticket_ui.render_workspace = function (frm) {
 	if (frm.is_new()) return;
 
 	const html_field = frm.fields_dict.support_ticket_workspace;
-	let $host = html_field?.$wrapper?.find(".ma-support-ticket-html-root");
+	let $host = frm._ma_inbox_host || html_field?.$wrapper?.find(".ma-support-ticket-html-root");
 	if (!$host?.length) {
 		$host = section_wrapper(frm, "support_ticket_section").find(".form-section-body, .section-body").first();
 	}
@@ -444,11 +483,13 @@ mobile_app.support_ticket_ui.render_workspace = function (frm) {
 	});
 	$inbox.find(".ma-support-inbox__filter--status").on("change", (e) => {
 		frm._ma_support_ticket_filters.status = $(e.currentTarget).val();
-		apply_ticket_filters(frm);
+		if (frm._ma_global_inbox) { frm._ma_start = 0; refresh_tickets(frm); }
+		else apply_ticket_filters(frm);
 	});
 	$inbox.find(".ma-support-inbox__filter--category").on("change", (e) => {
 		frm._ma_support_ticket_filters.category = $(e.currentTarget).val();
-		apply_ticket_filters(frm);
+		if (frm._ma_global_inbox) { frm._ma_start = 0; refresh_tickets(frm); }
+		else apply_ticket_filters(frm);
 	});
 	$inbox.find(".ma-support-inbox__composer-input").on("keydown", (e) => {
 		if (e.key === "Enter" && !e.shiftKey) {
@@ -466,3 +507,5 @@ mobile_app.support_ticket_ui.setup = function (frm) {
 		mobile_app.support_ticket_ui.render_workspace(frm);
 	});
 };
+
+mobile_app.support_ticket_ui.refresh = refresh_tickets;

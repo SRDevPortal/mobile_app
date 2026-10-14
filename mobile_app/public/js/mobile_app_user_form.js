@@ -110,44 +110,6 @@ function clear_clinical_header(frm) {
 	frm.$wrapper?.find(".ma-clinical-header-mount").remove();
 }
 
-function setup_support_ticket_ui(frm) {
-	if (frm.is_new() || !mobile_app.support_ticket_ui) return;
-	mobile_app.support_ticket_ui.setup(frm);
-}
-
-function open_routed_support_ticket_chat(frm) {
-	const opts = frappe.route_options || {};
-	if (!opts.open_support_ticket_chat) return;
-
-	const ticket_name = opts.support_ticket_name;
-	const ticket_doctype = opts.support_ticket_doctype || "App Support Ticket";
-	delete opts.open_support_ticket_chat;
-	delete opts.support_ticket_name;
-	delete opts.support_ticket_doctype;
-
-	frm._ma_active_ticket_name = ticket_name || null;
-	frm._ma_active_ticket_doctype = ticket_doctype;
-
-	setTimeout(() => {
-		const tab = frm.fields_dict.support_ticket_workspace?.tab;
-		if (tab?.set_active) {
-			tab.set_active();
-		} else {
-			frm.$wrapper
-				.find('.form-tabs .nav-link[data-fieldname="support_ticket_tab"]')
-				.trigger("click");
-		}
-
-		setup_support_ticket_ui(frm);
-		setTimeout(() => {
-			const $mount = frm.$wrapper.find(".ma-support-inbox-mount").first();
-			if ($mount.length) {
-				$mount[0].scrollIntoView({ behavior: "smooth", block: "start" });
-			}
-		}, 350);
-	}, 120);
-}
-
 frappe.ui.form.on("Mobile App User", {
 	onload(frm) {
 		frappe.require(CLINICAL_CSS);
@@ -174,8 +136,6 @@ frappe.ui.form.on("Mobile App User", {
 		start_live_poll(frm);
 		setup_sidebar(frm);
 		setup_clinical_ui(frm);
-		setup_support_ticket_ui(frm);
-		open_routed_support_ticket_chat(frm);
 	},
 
 	medical_tab(frm) {
@@ -191,12 +151,6 @@ frappe.ui.form.on("Mobile App User", {
 			if (mobile_app.clinical_ui) {
 				mobile_app.clinical_ui.render_health_workspace(frm);
 			}
-		}, 80);
-	},
-
-	support_ticket_tab(frm) {
-		setTimeout(() => {
-			setup_support_ticket_ui(frm);
 		}, 80);
 	},
 

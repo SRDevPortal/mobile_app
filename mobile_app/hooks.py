@@ -47,7 +47,7 @@ app_include_js = [
 	"/assets/mobile_app/js/doctor_clinical_guard.js",
 	"/assets/mobile_app/js/mobile_app_desk_utils.js",
 	"/assets/mobile_app/js/mobile_app_realtime.js?v=20260929_events",
-	"/assets/mobile_app/js/mobile_app_workspace.js?v=20260929_stable_dashboard",
+	"/assets/mobile_app/js/mobile_app_workspace.js?v=20261014_support_menu",
 ]
 # app_include_js = "/assets/mobile_app/js/mobile_app.js"
 
@@ -56,13 +56,13 @@ doctype_js = {
     "Diet Chart": "public/js/diet_chart.js",
 	"Mobile App User": [
 		"public/js/mobile_app_clinical_ui.js",
-		"public/js/mobile_app_support_ticket_ui.js",
 		"public/js/mobile_app_user_form.js",
 	],
 	"Mobile App Appointment": "public/js/mobile_app_appointment.js",
 }
 
 doctype_list_js = {
+    "Support Ticket": "public/js/support_ticket_list.js",
 	"Mobile App User": "public/js/mobile_app_user_list.js",
 	"Mobile App Appointment": "public/js/mobile_app_appointment_list.js",
 	"App Support Ticket": "public/js/app_support_ticket_list.js",
@@ -305,6 +305,7 @@ doc_events = {
 
 for _doctype in (
     "Mobile App User", "Mobile App Appointment", "App Support Ticket",
+    "Support Ticket", "Support Ticket Message", "App Support Ticket Message",
     "Patient Encounter", "Healthcare Practitioner", "Patient",
     "Mobile Appointment Workflow", "Clinic Appointment", "Practitioner Schedule", "Doctor Availability Exception",
 ):
@@ -313,6 +314,9 @@ for _doctype in (
         "after_delete": "mobile_app.realtime.notify_change",
     })
 
+
+for _message_doctype in ("Support Ticket Message", "App Support Ticket Message"):
+    doc_events.setdefault(_message_doctype, {})["after_insert"] = "mobile_app.realtime.touch_support_ticket"
 
 
 doc_events.setdefault("Clinic Appointment", {})["before_validate"] = "mobile_app.api.opd_queue.preserve_clinic_progress"

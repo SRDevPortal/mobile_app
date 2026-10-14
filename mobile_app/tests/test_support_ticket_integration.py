@@ -128,3 +128,88 @@ class TestSiyaSupportInbox(TestSupportTicketIntegration):
         api.delete_support_ticket(self.user.name, self.siya.name, "Support Ticket")
         self.assertFalse(frappe.db.exists("Support Ticket", self.siya.name))
         self.assertTrue(frappe.db.exists("App Support Ticket", self.ticket.name))
+
+class TestDeskSupportInbox(TestSiyaSupportInbox):
+    def test_desk_inbox_includes_both_sources_and_customer_identity(self):
+        rows = api.get_desk_support_inbox(search=self.user.name)["tickets"]
+        self.assertEqual({(r["ticket_doctype"], r["name"]) for r in rows},
+                         {("App Support Ticket", self.ticket.name), ("Support Ticket", self.siya.name)})
+        self.assertTrue(all(r["mobile_app_user"] == self.user.name for r in rows))
+        self.assertTrue(all(r["user_name"] == self.user.full_name for r in rows))
+        api.set_support_ticket_status(self.user.name, self.ticket.name, "Closed")
+        rows = api.get_desk_support_inbox(search=self.user.name, status="Closed")["tickets"]
+        self.assertEqual([r["name"] for r in rows], [self.ticket.name])
+
+    def test_desk_inbox_requires_login_and_profile_permission(self):
+        with patch.object(api, "_get_user_doc", side_effect=frappe.PermissionError):
+            self.assertEqual(api.get_desk_support_inbox(search=self.user.name)["tickets"], [])
+        frappe.set_user("Guest")
+        with self.assertRaises(frappe.PermissionError):
+            api.get_desk_support_inbox()
+
+    def test_customer_badge_counts_and_read_reset(self):
+        for sender in ("User", "Agent"):
+            frappe.get_doc({"doctype": "Support Ticket Message", "ticket": self.siya.name,
+                "sender_type": sender, "sender_id": self.user.name, "message": "Badge check",
+                "is_read": 0, "timestamp": frappe.utils.now_datetime()}).insert()
+        self.assertEqual(api.get_support_ticket_message_counts([self.siya.name]), {self.siya.name: 1})
+        api.mark_support_ticket_read(self.user.name, self.siya.name, "Support Ticket")
+        self.assertEqual(api.get_support_ticket_message_counts([self.siya.name]), {self.siya.name: 0})
+        frappe.get_doc({"doctype": "Support Ticket Message", "ticket": self.siya.name,
+            "sender_type": "User", "sender_id": self.user.name, "message": "New customer message",
+            "is_read": 0, "timestamp": frappe.utils.now_datetime()}).insert()
+        self.assertEqual(api.get_support_ticket_message_counts([self.siya.name]), {self.siya.name: 1})
+
+    def test_inbox_exact_ticket_routing_and_permissions(self):
+        rows = api.get_desk_support_inbox(ticket_name=self.siya.name, ticket_doctype="Support Ticket")["tickets"]
+        self.assertEqual([(r["ticket_doctype"], r["name"]) for r in rows], [("Support Ticket", self.siya.name)])
+        self.assertEqual(api.get_desk_support_inbox(ticket_name=self.siya.name, ticket_doctype="App Support Ticket")["tickets"], [])
+        with self.assertRaises(frappe.ValidationError):
+            api.get_desk_support_inbox(ticket_name=self.siya.name, ticket_doctype="User")
+        with patch.object(frappe, "get_list", return_value=[]):
+            self.assertEqual(api.get_support_ticket_message_counts([self.siya.name]), {})
+        frappe.set_user("Guest")
+        with self.assertRaises(frappe.PermissionError):
+            api.get_support_ticket_message_counts([self.siya.name])
+
+
+    def test_new_messages_bring_old_tickets_to_first_page_without_read_receipt_reordering(self):
+        # Enough newer tickets to push both original conversations off page one.
+        for i in range(21):
+            frappe.get_doc({"doctype": "Support Ticket", "user_id": self.user.name,
+                "subject": f"Newer ticket {i}", "status": "Open",
+                "priority": "Medium", "category": "General"}).insert()
+        first = api.get_desk_support_inbox(search=self.user.name)
+        self.assertNotIn(self.siya.name, [r["name"] for r in first["tickets"]])
+        for ticket, message_type in ((self.siya, "Support Ticket Message"),
+                                     (self.ticket, "App Support Ticket Message")):
+            frappe.get_doc({"doctype": message_type, "ticket": ticket.name,
+                "sender_type": "User", "sender_id": self.user.name,
+                "message": "New activity on an old conversation",
+                "timestamp": frappe.utils.now_datetime(), "is_read": 0}).insert()
+            top = api.get_desk_support_inbox(search=self.user.name)["tickets"][0]
+            self.assertEqual((top["ticket_doctype"], top["name"]), (ticket.doctype, ticket.name))
+            modified = frappe.db.get_value(ticket.doctype, ticket.name, "modified")
+            api.mark_support_ticket_read(self.user.name, ticket.name, ticket.doctype)
+            self.assertEqual(frappe.db.get_value(ticket.doctype, ticket.name, "modified"), modified)
+            # Replying must still work after the message hook updates the parent.
+            reply = api.send_support_reply(self.user.name, ticket.name, "Received", ticket.doctype)
+            self.assertEqual(reply["ticket"]["messages"][-1]["body"], "Received")
+
+    def test_category_options_and_filter_include_tickets_beyond_first_page(self):
+        for i in range(21):
+            frappe.get_doc({"doctype": "Support Ticket", "user_id": self.user.name,
+                "subject": f"General ticket {i}", "status": "Open",
+                "priority": "Medium", "category": "General"}).insert()
+        first = api.get_desk_support_inbox(search=self.user.name)
+        self.assertTrue(first["has_more"])
+        self.assertNotIn("Orders", [r["label"] for r in first["tickets"]])
+        self.assertIn("Orders", first["categories"])
+        self.assertIn("Appointment", first["categories"])
+        for category, ticket in (("Orders", self.siya), ("Appointment", self.ticket)):
+            filtered = api.get_desk_support_inbox(search=self.user.name, category=category)
+            self.assertEqual([r["name"] for r in filtered["tickets"]], [ticket.name])
+            self.assertFalse(filtered["has_more"])
+        empty = api.get_desk_support_inbox(search=self.user.name, category="No matches")
+        self.assertEqual(empty["tickets"], [])
+        self.assertIn("Orders", empty["categories"])

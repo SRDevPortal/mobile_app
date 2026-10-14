@@ -95,6 +95,9 @@
 			.${DASHBOARD_CLASS} { width: 100%; max-width: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; margin: 0 0 28px; }
 			.ma-mobile-dashboard-card { position: relative; min-height: 192px; border: 0; border-radius: 24px; padding: 24px; display: flex; flex-direction: column; justify-content: space-between; color: #fff; text-align: left; overflow: hidden; cursor: pointer; box-shadow: 0 16px 32px rgba(15, 23, 42, 0.12); transition: transform .25s ease, box-shadow .25s ease; }
 			.ma-mobile-dashboard-card:hover { transform: translateY(-4px); box-shadow: 0 24px 46px rgba(15, 23, 42, 0.18); }
+			.ma-support-destinations { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; padding: 8px 0; }
+			.ma-support-destinations .ma-mobile-dashboard-card:focus-visible { outline: 3px solid #111827; outline-offset: 3px; }
+			@media (max-width: 575px) { .ma-support-destinations { grid-template-columns: 1fr; } }
 			.ma-mobile-dashboard-card--green { background: linear-gradient(135deg, #10b981 0%, #0f766e 100%); }
 			.ma-mobile-dashboard-card--blue { background: linear-gradient(135deg, #3b82f6 0%, #0284c7 100%); }
 			.ma-mobile-dashboard-card--purple { background: linear-gradient(135deg, #a855f7 0%, #4f46e5 100%); }
@@ -127,6 +130,7 @@
 				'<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/><circle cx="9" cy="15" r="2"/><path d="M13 17c.8-1.8 4.2-1.8 5 0"/>',
 			ticket:
 				'<path d="M5 6h14a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4V8a2 2 0 0 1 2-2Z"/><path d="M9 9h6M9 15h6"/>',
+			chat: '<path d="M21 11a8 8 0 0 1-8 8H7l-4 3V11a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8Z"/><path d="M7 9h10M7 13h6"/>',
 			play: '<circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4Z"/>',
 		};
 
@@ -180,10 +184,35 @@
 			.addClass("ma-mobile-dashboard-raw-hidden");
 	}
 
+	function open_support_menu() {
+		const choices = [
+			{key: "support-list", title: "Support Tickets", metric: "Tickets", accent: "purple", icon: "ticket",
+				footer_label: "View and manage tickets", footer_value: "Open", route: ["List", "Support Ticket"]},
+			{key: "support-chats", title: "Chats", metric: "Chats", accent: "blue", icon: "chat",
+				footer_label: "Read and reply to messages", footer_value: "Open", route: ["List", "App Support Ticket"]},
+		];
+		const dialog = new frappe.ui.Dialog({
+			title: __("Support"), size: "large",
+			fields: [{fieldtype: "HTML", fieldname: "destinations"}],
+		});
+		dialog.fields_dict.destinations.$wrapper.html(
+			`<div class="ma-support-destinations">${choices.map(card_html).join("")}</div>`
+		).on("click", ".ma-mobile-dashboard-card", function () {
+			const choice = choices.find(item => item.key === $(this).data("card-key"));
+			if (!choice) return;
+			delete frappe._mobile_support_target;
+			frappe.route_options = null;
+			dialog.hide();
+			frappe.set_route(...choice.route);
+		});
+		dialog.show();
+	}
+
 	function bind_cards($dashboard) {
 		$dashboard.find(".ma-mobile-dashboard-card").on("click", function () {
 			const card = CARDS.find((item) => item.key === $(this).data("card-key"));
 			if (!card?.route) return;
+			if (card.key === "tickets") return open_support_menu();
 			frappe.set_route(...card.route);
 		});
 	}

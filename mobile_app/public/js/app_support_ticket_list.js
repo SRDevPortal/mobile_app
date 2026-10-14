@@ -1,152 +1,90 @@
-/* App Support Ticket list - patient identity first column */
-mobile_app.realtime.configure_lists();
-
-function ast_escape(value) {
-	return frappe.utils.escape_html(value == null || value === "" ? "" : String(value));
+function apply_support_ticket_route(listview) {
+    const context = listview._support_inbox;
+    if (!context) return;
+    const params = new URLSearchParams(window.location.search);
+    const target = frappe._mobile_support_target;
+    const name = target?.name || params.get("support_ticket");
+    const source = target?.doctype || params.get("support_source") || "Support Ticket";
+    const key = name ? `${source}:${name}` : "";
+    if (!name && context._ma_route_key) {
+        context._ma_route_key = ""; context._ma_ticket_name = null; context._ma_ticket_doctype = null;
+        context._ma_start = 0; context._ma_search = "";
+        listview._support_search?.val("");
+    }
+    if (!name || !["Support Ticket", "App Support Ticket"].includes(source) || context._ma_route_key === key) return;
+    delete frappe._mobile_support_target;
+    const url = new URL(window.location.href);
+    url.searchParams.set("support_ticket", name); url.searchParams.set("support_source", source);
+    window.history.replaceState(window.history.state, "", url);
+    context._ma_route_key = key;
+    context._ma_ticket_name = name;
+    context._ma_ticket_doctype = source;
+    context._ma_active_ticket_name = name;
+    context._ma_active_ticket_doctype = source;
+    context._ma_start = 0;
+    context._ma_search = "";
+    context._ma_support_ticket_filters = {status: "__all", category: "__all"};
+    context._ma_support_inbox?.find("select").val("__all");
+    listview._support_search?.val(name);
 }
 
-function ast_initials(name) {
-	const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
-	return ((parts[0]?.[0] || "U") + (parts[1]?.[0] || "")).toUpperCase();
-}
-
-function ast_patient_key(doc) {
-	return doc.mobile_app_user || doc.user_id || "";
-}
-
-function ast_identity_html(doc, image) {
-	const patient_name = doc.user_name || doc.mobile_app_user || doc.user_id || __("Unknown User");
-	const avatar = image
-		? `<img class="ast-ticket-user__avatar"
-		 style="width: 35px !important; height: 35px !important; border-radius: 5px;"
-		 src="${ast_escape(image)}" alt="">`
-		: `<span class="ast-ticket-user__avatar ast-ticket-user__avatar--fallback">${ast_escape(
-			ast_initials(patient_name)
-		)}</span>`;
-
-	return `
-		<div class="ast-ticket-user" data-patient="${ast_escape(ast_patient_key(doc))}">
-			${avatar}
-			<span class="ast-ticket-user__text">
-				<strong>${ast_escape(patient_name)}</strong>
-			</span>
-		</div>
-	`;
-}
-
-function ast_subject_column_html(doc) {
-	const href = `/app/app-support-ticket/${encodeURIComponent(doc.name)}`;
-	return `
-		<div class="list-row-col hidden-xs ellipsis ast-ticket-subject-col">
-			<a class="filterable ellipsis" href="${ast_escape(href)}" title="${ast_escape(doc.subject)}">
-				${ast_escape(doc.subject || "-")}
-			</a>
-		</div>
-	`;
-}
-
-function ast_open_ticket_chat(doc) {
-	const mobile_app_user = doc.mobile_app_user || doc.user_id;
-	if (!mobile_app_user) {
-		frappe.msgprint(__("No Mobile App User is linked to this ticket."));
-		return;
-	}
-
-	frappe.route_options = {
-		open_support_ticket_chat: 1,
-		support_ticket_name: doc.name,
-	};
-	frappe.set_route("Form", "Mobile App User", mobile_app_user);
-}
-
-function ast_prepare_header(listview) {
-	const $header = listview.$result.find(".list-row-head").first();
-	const $subject_header = $header.find(".list-row-col.list-subject").first();
-	$subject_header.find("span[data-sort-by='subject']").text(__("User"));
-
-	if (!$header.find(".ast-ticket-subject-col").length) {
-		$subject_header.after(`
-			<div class="list-row-col hidden-xs ellipsis ast-ticket-subject-col">
-				<span data-sort-by="subject" title="${__("Click to sort by {0}", [__("Subject")])}">
-					${__("Subject")}
-				</span>
-			</div>
-		`);
-	}
-
-	$header.find("span[data-sort-by='name']").closest(".list-row-col").hide();
-	$header
-		.find(".list-row-col")
-		.filter(function () {
-			return $(this).text().trim() === __("ID");
-		})
-		.last()
-		.hide();
-}
-
-function ast_render_identity_cells(listview, images = {}) {
-	listview.$result.addClass("ast-ticket-list");
-	ast_prepare_header(listview);
-
-	listview.$result.find(".list-row-container").each((index, row) => {
-		const doc = listview.data[index];
-		if (!doc) return;
-
-		$(row).addClass("ast-ticket-row");
-		$(row).data("ast-doc", doc);
-		const $subject = $(row).find(".list-row-col.list-subject").first();
-		$(row).find(".ast-ticket-subject-col").remove();
-		$subject.after(ast_subject_column_html(doc));
-
-		$(row)
-			.find(".list-row-col")
-			.filter(function () {
-				return $(this).text().trim() === doc.name;
-			})
-			.last()
-			.hide();
-
-		const $link = $subject.find('a[data-doctype="App Support Ticket"]').first();
-		if (!$link.length) return;
-
-		$link.removeClass("ellipsis");
-		$link.html(ast_identity_html(doc, images[doc.mobile_app_user]));
-	});
-
-	listview.$result.off("click.ast-ticket-chat").on("click.ast-ticket-chat", ".ast-ticket-row .list-row", function (e) {
-		if ($(e.target).closest(".list-row-checkbox, .like-action, .comment-count, .list-assignments").length) {
-			return;
-		}
-
-		e.preventDefault();
-		e.stopPropagation();
-		const doc = $(this).closest(".ast-ticket-row").data("ast-doc");
-		if (doc) ast_open_ticket_chat(doc);
-	});
-}
-
-function ast_hydrate_avatars(listview) {
-	const docs = listview?.data || [];
-	const patient_names = [...new Set(docs.map((doc) => doc.mobile_app_user).filter(Boolean))];
-	if (!patient_names.length) return;
-
-	frappe.db
-		.get_list("Mobile App User", {
-			fields: ["name", "image"],
-			filters: [["name", "in", patient_names]],
-			limit: patient_names.length,
-		})
-		.then((rows) => {
-			const images = Object.fromEntries((rows || []).map((row) => [row.name, row.image]));
-			ast_render_identity_cells(listview, images);
-		});
-}
-
+/* Central support inbox: both ticket integrations keep their original IDs. */
 frappe.listview_settings["App Support Ticket"] = {
-	add_fields: ["user_name", "user_id", "mobile_app_user", "subject"],
-
-	refresh(listview) {
-		ast_render_identity_cells(listview);
-		ast_hydrate_avatars(listview);
-	},
+    onload(listview) {
+        $(listview.page.wrapper).addClass("ma-central-support");
+        frappe.require("/assets/mobile_app/js/mobile_app_support_ticket_ui.js", () => {
+            if (listview._support_inbox) return;
+            const $host = $('<div class="app-support-conversations"></div>').insertBefore(listview.$result);
+            const $tools = $('<div class="mb-3 d-flex align-items-center" style="gap: 10px"></div>').appendTo($host);
+            const $search = $('<input type="search" class="form-control" placeholder="Search customer, subject or ticket" aria-label="Search tickets" style="max-width: 360px">').appendTo($tools);
+            const $previous = $('<button class="btn btn-default btn-sm">Previous</button>').appendTo($tools);
+            const $next = $('<button class="btn btn-default btn-sm">Next</button>').appendTo($tools);
+            const $page = $('<span class="text-muted"></span>').appendTo($tools);
+            const $mount = $('<div></div>').appendTo($host);
+            const context = {
+                doc: {}, fields_dict: {}, is_new: () => false,
+                _ma_global_inbox: true, _ma_inbox_host: $mount, _ma_start: 0,
+                _ma_page_update(data) {
+                    $previous.prop("disabled", !context._ma_start);
+                    $next.prop("disabled", !data?.has_more);
+                    $page.text(__("Page {0}", [Math.floor(context._ma_start / 20) + 1]));
+                }
+            };
+            listview._support_inbox = context;
+            listview._support_search = $search;
+            apply_support_ticket_route(listview);
+            const refresh = () => mobile_app.support_ticket_ui.refresh(context, {preserve_composer: true, preserve_scroll: true});
+            // Frappe can reuse a cached list without calling its refresh hook.
+            frappe.router.on("change", () => {
+                const route = frappe.get_route();
+                if (route[0] !== "List" || route[1] !== "App Support Ticket") return;
+                apply_support_ticket_route(listview);
+                refresh();
+            });
+            let timer;
+            $search.on("input", () => {
+                clearTimeout(timer);
+                timer = setTimeout(() => {
+                    context._ma_start = 0; context._ma_search = $search.val();
+                    context._ma_ticket_name = null; context._ma_ticket_doctype = null; context._ma_route_key = "";
+                    const url = new URL(window.location.href);
+                    url.searchParams.delete("support_ticket"); url.searchParams.delete("support_source");
+                    window.history.replaceState(window.history.state, "", url);
+                    refresh();
+                }, 300);
+            });
+            $previous.on("click", () => {context._ma_start = Math.max(0, context._ma_start - 20); refresh();});
+            $next.on("click", () => {context._ma_start += 20; refresh();});
+            mobile_app.support_ticket_ui.setup(context);
+            listview.$result.hide();
+            $(listview.page.wrapper).find(".list-filters, .result-pagination, .layout-side-section").hide();
+        });
+    },
+    refresh(listview) {
+        if (!listview._support_inbox) return;
+        apply_support_ticket_route(listview);
+        listview.$result.hide();
+        $(listview.page.wrapper).find(".list-filters, .result-pagination, .layout-side-section").hide();
+        mobile_app.support_ticket_ui.refresh(listview._support_inbox, {preserve_composer: true, preserve_scroll: true});
+    }
 };
