@@ -47,7 +47,7 @@ app_include_js = [
 	"/assets/mobile_app/js/doctor_clinical_guard.js",
 	"/assets/mobile_app/js/mobile_app_desk_utils.js",
 	"/assets/mobile_app/js/mobile_app_realtime.js?v=20260929_events",
-	"/assets/mobile_app/js/mobile_app_workspace.js?v=20261014_support_menu",
+	"/assets/mobile_app/js/mobile_app_workspace.js?v=20261014_compact_cards",
 ]
 # app_include_js = "/assets/mobile_app/js/mobile_app.js"
 
