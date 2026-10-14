@@ -6,6 +6,7 @@ app_email = "admin@example.com"
 app_license = "mit"
 
 after_install = [
+    "mobile_app.install.refresh_module_map",
     "mobile_app.diet_chart_setup.after_migrate",
     "mobile_app.calendar_setup.after_migrate",
     "mobile_app.opd_setup.after_migrate",
