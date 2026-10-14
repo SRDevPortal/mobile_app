@@ -32,7 +32,7 @@ function apply_support_ticket_route(listview) {
 frappe.listview_settings["App Support Ticket"] = {
     onload(listview) {
         $(listview.page.wrapper).addClass("ma-central-support");
-        frappe.require("/assets/mobile_app/js/mobile_app_support_ticket_ui.js", () => {
+        frappe.require("support_inbox.bundle.js", () => {
             if (listview._support_inbox) return;
             const $host = $('<div class="app-support-conversations"></div>').insertBefore(listview.$result);
             const $tools = $('<div class="mb-3 d-flex align-items-center" style="gap: 10px"></div>').appendTo($host);

@@ -3,7 +3,7 @@
 frappe.provide("mobile_app.support_ticket_ui");
 
 const SUPPORT_TICKET_CSS = "/assets/mobile_app/css/mobile_app_support_ticket.css";
-const SUPPORT_TICKET_REFRESH_MS = 10000;
+const SUPPORT_TICKET_REFRESH_MS = 60000;
 
 function time_ago(ts) {
 	if (!ts) return "";
@@ -72,6 +72,7 @@ function render_messages($messages, ticket, opts = {}) {
 		? node.scrollHeight - node.scrollTop - node.clientHeight < 80
 		: true;
 
+	const previous_top = node?.scrollTop || 0;
 	$messages.empty();
 	const messages = ticket?.messages || [];
 	if (!messages.length) {
@@ -99,32 +100,126 @@ function render_messages($messages, ticket, opts = {}) {
 		});
 	if (!opts.preserve_scroll || was_near_bottom) {
 		$messages.scrollTop($messages[0].scrollHeight);
-	}
+	} else $messages.scrollTop(previous_top);
+}
+
+
+function conversation_key(ticket) {
+    return `${ticket.ticket_doctype || "App Support Ticket"}:${ticket.name}`;
+}
+
+function conversation_state(frm, ticket) {
+    frm._ma_conversations ||= new Map();
+    const key = conversation_key(ticket);
+    if (!frm._ma_conversations.has(key)) frm._ma_conversations.set(key, {messages: [], loaded: false, draft: ""});
+    return frm._ma_conversations.get(key);
+}
+
+function active_is(frm, ticket) {
+    return frm._ma_active_ticket_name === ticket.name && frm._ma_active_ticket_doctype === ticket.ticket_doctype;
+}
+
+function merge_summary(frm, summary) {
+    if (!summary) return;
+    const ticket = (frm._ma_support_tickets || []).find(t => conversation_key(t) === conversation_key(summary));
+    if (ticket) Object.assign(ticket, summary);
+}
+
+function show_conversation(frm, ticket, state, older = false) {
+    if (!active_is(frm, ticket)) return;
+    const $messages = frm._ma_support_inbox.find(".ma-support-inbox__messages");
+    const node = $messages[0], top = node.scrollTop, height = node.scrollHeight;
+    render_messages($messages, {...ticket, messages: state.messages}, {preserve_scroll: state.shown});
+    if (state.has_older) {
+        $('<button type="button" class="btn btn-default btn-sm ma-load-older"></button>')
+            .text(__("Load older messages")).prop("disabled", Boolean(state.loading))
+            .on("click", () => load_conversation(frm, ticket, true)).prependTo($messages);
+    }
+    if (older) node.scrollTop = top + node.scrollHeight - height;
+    else if (state.restore_scroll != null) {node.scrollTop = state.restore_scroll; delete state.restore_scroll;}
+    state.shown = true;
+}
+
+function load_conversation(frm, ticket, older = false) {
+    const state = conversation_state(frm, ticket);
+    if (state.loading) {if (!older) state.refresh_again = true; return;}
+    if (older && !state.has_older) return;
+    const was_loaded = state.loaded;
+    const cursor = older ? state.messages[0]?.name : (state.loaded ? state.messages.at(-1)?.name : null);
+    state.loading = true;
+    frm._ma_support_inbox.find(".ma-load-older").prop("disabled", true);
+    frappe.call({
+        method: "mobile_app.api.desk_support.messages",
+        args: {mobile_app_user: ticket.mobile_app_user, ticket_name: ticket.name, ticket_doctype: ticket.ticket_doctype,
+            before: older ? cursor : null, after: older ? null : cursor},
+        callback(r) {
+            state.loading = false;
+            if (!r.message) return;
+            const data = r.message, rows = data.messages || [];
+            const merged = new Map(state.messages.map(message => [message.name, message]));
+            rows.forEach(message => merged.set(message.name, message));
+            state.messages = [...merged.values()].sort((a,b) =>
+                String(a.creation).localeCompare(String(b.creation)) || a.name.localeCompare(b.name));
+            if (older || !was_loaded) state.has_older = data.has_more;
+            state.loaded = true;
+            merge_summary(frm, data.ticket);
+            if (active_is(frm, ticket)) {
+                show_conversation(frm, ticket, state, older);
+                mark_ticket_seen(frm, ticket);
+            }
+            // Drain a burst in bounded pages without dropping messages or replacing older pages.
+            if ((cursor && !older && data.has_more) || state.refresh_again) {
+                state.refresh_again = false;
+                if (active_is(frm, ticket) && !document.hidden) load_conversation(frm, ticket);
+            }
+        },
+        error() {
+            state.loading = false;
+            state.refresh_again = false;
+            if (!active_is(frm, ticket)) return;
+            show_conversation(frm, ticket, state);
+            $('<button type="button" class="btn btn-default btn-sm"></button>')
+                .text(__("Could not load messages. Retry")).on("click", () => load_conversation(frm, ticket, older))
+                .prependTo(frm._ma_support_inbox.find(".ma-support-inbox__messages"));
+        }
+    });
 }
 
 function mark_ticket_seen(frm, ticket) {
-    if (!frm._ma_global_inbox || !ticket.can_mark_read || !ticket.unread_count) return;
-    const key = `${ticket.ticket_doctype}:${ticket.name}`;
-    frm._ma_reading = frm._ma_reading || new Set();
-    if (frm._ma_reading.has(key)) return;
-    frm._ma_reading.add(key);
+    if (!frm._ma_global_inbox || !ticket.can_mark_read || !ticket.unread_count || document.hidden) return;
+    const state = conversation_state(frm, ticket);
+    const through = state.messages.at(-1)?.name;
+    if (!through || state.reading || state.read_through === through) return;
+    state.reading = true;
     frappe.call({
-        method: "mobile_app.api.support_ticket.mark_support_ticket_read",
-        args: {mobile_app_user: ticket.mobile_app_user, ticket_name: ticket.name, ticket_doctype: ticket.ticket_doctype},
-        callback() {
-            ticket.unread_count = 0;
-            frm._ma_support_inbox.find(".ma-support-inbox__item").filter((_, node) =>
-                $(node).data("ticket") === ticket.name && $(node).data("ticket-doctype") === ticket.ticket_doctype
-            ).find(".ma-support-inbox__unread-badge").remove();
-            frm._ma_reading.delete(key);
+        method: "mobile_app.api.desk_support.read",
+        args: {mobile_app_user: ticket.mobile_app_user, ticket_name: ticket.name, ticket_doctype: ticket.ticket_doctype, through},
+        callback(r) {
+            state.reading = false;
+            state.read_through = through;
+            merge_summary(frm, r.message?.ticket);
+            const $item = frm._ma_support_inbox.find(".ma-support-inbox__item").filter((_, node) =>
+                $(node).data("ticket") === ticket.name && $(node).data("ticket-doctype") === ticket.ticket_doctype);
+            $item.find(".ma-support-inbox__unread-badge").remove();
+            if (ticket.unread_count) $item.append($('<span class="ma-support-inbox__unread-badge"></span>').text(ticket.unread_count));
+            if (active_is(frm, ticket) && state.messages.at(-1)?.name !== through) mark_ticket_seen(frm, ticket);
         },
-        error() { frm._ma_reading.delete(key); }
+        error() {state.reading = false;}
     });
 }
 
 function select_ticket(frm, ticket, opts = {}) {
 	if (frm._ma_support_sending) return;
+    const changed = frm._ma_displayed_key !== conversation_key(ticket);
+    if (frm._ma_global_inbox && changed && frm._ma_displayed_ticket) {
+        const previous = frm._ma_displayed_ticket;
+        const previous_state = conversation_state(frm, previous);
+        previous_state.draft = frm._ma_support_inbox.find(".ma-support-inbox__composer-input").val() || "";
+        previous_state.scroll = frm._ma_support_inbox.find(".ma-support-inbox__messages").scrollTop();
+    }
 	if (frm._ma_active_ticket_name !== ticket?.name || frm._ma_active_ticket_doctype !== ticket?.ticket_doctype) opts = {...opts, preserve_composer: false};
+	frm._ma_displayed_key = conversation_key(ticket);
+    frm._ma_displayed_ticket = ticket;
 	frm._ma_active_ticket_user = ticket?.mobile_app_user || frm.doc.name;
 	frm._ma_active_ticket_name = ticket?.name;
 	frm._ma_active_ticket_doctype = ticket?.ticket_doctype || "App Support Ticket";
@@ -151,8 +246,18 @@ function select_ticket(frm, ticket, opts = {}) {
 	$status.text(ticket.status || __("Open"));
 	$root.find(".ma-support-inbox__status-btn").removeClass("is-active");
 	$root.find(`.ma-support-inbox__status-btn[data-status="${ticket.status}"]`).addClass("is-active");
-	render_messages($messages, ticket, { preserve_scroll: opts.preserve_scroll });
-	if (!opts.preserve_composer) {
+    if (frm._ma_global_inbox) {
+        const state = conversation_state(frm, ticket);
+        if (changed) {
+            state.shown = false;
+            state.restore_scroll = state.scroll;
+            $input.val(state.draft);
+        }
+        if (state.loaded) show_conversation(frm, ticket, state);
+        else $messages.empty().append($("<p class='p-3 text-muted'></p>").text(__("Loading messages…")));
+        load_conversation(frm, ticket);
+    } else render_messages($messages, ticket, { preserve_scroll: opts.preserve_scroll });
+	if (!frm._ma_global_inbox && !opts.preserve_composer) {
 		$input.val("");
 	}
 	$input.prop("disabled", is_closed);
@@ -165,7 +270,12 @@ function render_ticket_list(frm, tickets, opts = {}) {
 	const $list = $root.find(".ma-support-inbox__list");
 	$list.empty();
 
-	if (!tickets.length) {
+    if (!tickets.length) {
+        if (frm._ma_global_inbox && frm._ma_active_ticket_name) {
+            const state = conversation_state(frm, {name: frm._ma_active_ticket_name, ticket_doctype: frm._ma_active_ticket_doctype});
+            state.draft = $root.find(".ma-support-inbox__composer-input").val() || "";
+            state.scroll = $root.find(".ma-support-inbox__messages").scrollTop();
+        }
 		frm._ma_active_ticket_name = null;
 		$list.append(
 			$('<div class="ma-support-inbox__thread-empty p-4"></div>').append(
@@ -247,12 +357,15 @@ function refresh_tickets(frm, opts = {}) {
 	const $root = frm._ma_support_inbox;
 	if (!$root?.length || !document.body.contains($root[0])) return;
 
+    const query_key = () => JSON.stringify([frm._ma_start, frm._ma_search, frm._ma_ticket_name, frm._ma_ticket_doctype, frm._ma_support_ticket_filters]);
+    const requested_key = query_key();
 	frm._ma_support_ticket_refreshing = true;
 	frappe.call({
-		method: frm._ma_global_inbox ? "mobile_app.api.support_ticket.get_desk_support_inbox" : "mobile_app.api.support_ticket.get_support_tickets",
+		method: frm._ma_global_inbox ? "mobile_app.api.desk_support.inbox" : "mobile_app.api.support_ticket.get_support_tickets",
 		args: frm._ma_global_inbox ? {start: frm._ma_start || 0, status: frm._ma_support_ticket_filters?.status, category: frm._ma_support_ticket_filters?.category, search: frm._ma_search || "", ticket_name: frm._ma_ticket_name || null, ticket_doctype: frm._ma_ticket_doctype || null} : { mobile_app_user: frm.doc.name },
 		callback(r) {
 			try {
+                if (requested_key !== query_key()) {frm._ma_refresh_again = true; return;}
 				$root.find(".ma-support-inbox__load-error").remove();
 				frm._ma_page_update?.(r.message);
 				frm._ma_support_tickets = r.message?.tickets || [];
@@ -261,7 +374,7 @@ function refresh_tickets(frm, opts = {}) {
 				apply_ticket_filters(frm, opts);
 			} finally {
 				frm._ma_support_ticket_refreshing = false;
-				if (frm._ma_refresh_again) { frm._ma_refresh_again = false; refresh_tickets(frm, opts); }
+				if (frm._ma_refresh_again) { frm._ma_refresh_again = false; refresh_tickets(frm, {...opts, preserve_composer: true, preserve_scroll: true}); }
 			}
 		},
 		error() {
@@ -302,7 +415,7 @@ function send_reply(frm) {
 
 	$root.find(".ma-support-inbox__send-btn").prop("disabled", true);
 	frappe.call({
-		method: "mobile_app.api.support_ticket.send_support_reply",
+		method: frm._ma_global_inbox ? "mobile_app.api.desk_support.reply" : "mobile_app.api.support_ticket.send_support_reply",
 		args: {
 			mobile_app_user: frm._ma_active_ticket_user || frm.doc.name,
 			ticket_name,
@@ -314,7 +427,12 @@ function send_reply(frm) {
 			$root.find(".ma-support-inbox__send-btn").prop("disabled", false);
 			if (!r.message) return;
 			$input.val("");
-			if (frm._ma_global_inbox) return refresh_tickets(frm, {preserve_composer: true});
+			if (frm._ma_global_inbox) {
+                merge_summary(frm, r.message.ticket);
+                const ticket = frm._ma_support_tickets.find(t => t.name === ticket_name && t.ticket_doctype === frm._ma_active_ticket_doctype);
+                if (ticket) {conversation_state(frm, ticket).draft = ""; apply_ticket_filters(frm, {preserve_composer: true, preserve_scroll: true});}
+                return;
+            }
 			frm._ma_support_tickets = r.message?.tickets || [];
 			update_category_filter_options(frm, frm._ma_support_tickets);
 			apply_ticket_filters(frm, { preserve_scroll: false });
@@ -333,7 +451,7 @@ function set_ticket_status(frm, status) {
 	const $root = frm._ma_support_inbox;
 	$root.find(".ma-support-inbox__status-btn").prop("disabled", true);
 	frappe.call({
-		method: "mobile_app.api.support_ticket.set_support_ticket_status",
+		method: frm._ma_global_inbox ? "mobile_app.api.desk_support.status" : "mobile_app.api.support_ticket.set_support_ticket_status",
 		args: {
 			mobile_app_user: frm._ma_active_ticket_user || frm.doc.name,
 			ticket_name,
@@ -343,7 +461,11 @@ function set_ticket_status(frm, status) {
 		callback(r) {
 			$root.find(".ma-support-inbox__status-btn").prop("disabled", false);
 			if (!r.message) return;
-			if (frm._ma_global_inbox) return refresh_tickets(frm, {preserve_composer: true});
+			if (frm._ma_global_inbox) {
+                merge_summary(frm, r.message.ticket);
+                apply_ticket_filters(frm, {preserve_composer: true, preserve_scroll: true});
+                return;
+            }
 			frm._ma_support_tickets = r.message?.tickets || [];
 			update_category_filter_options(frm, frm._ma_support_tickets);
 			apply_ticket_filters(frm, {
@@ -500,6 +622,14 @@ mobile_app.support_ticket_ui.render_workspace = function (frm) {
 
 	refresh_tickets(frm);
 	start_ticket_refresh(frm);
+    if (frm._ma_global_inbox) mobile_app.realtime?.watch?.("support-conversations",
+        ["Support Ticket", "Support Ticket Message", "App Support Ticket", "App Support Ticket Message"],
+        () => !document.hidden && Boolean(frm._ma_support_inbox?.is(":visible")),
+        () => {
+            if (frm._ma_support_sending || frm._ma_support_ticket_refreshing) return false;
+            refresh_tickets(frm, {preserve_composer: true, preserve_scroll: true});
+        });
+
 };
 
 mobile_app.support_ticket_ui.setup = function (frm) {

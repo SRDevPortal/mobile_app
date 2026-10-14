@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import os
-from urllib.parse import urlparse
 
 import frappe
-import requests
 from frappe import _
 from frappe.exceptions import AuthenticationError
 from frappe.utils.file_manager import save_file
@@ -159,34 +157,15 @@ def set_profile_image_from_url(user_name: str, image_url: str):
 	doc = frappe.get_doc("Mobile App User", user_name)
 	doc.check_permission("write")
 
+	from mobile_app.api.image_download import download_image, ImageDownloadError
 	try:
-		resp = requests.get(image_url, timeout=60)
-		resp.raise_for_status()
-	except requests.RequestException as e:
-		frappe.throw(_("Could not download image: {0}").format(str(e)))
+		content, image_format = download_image(image_url)
+	except ImageDownloadError as exc:
+		frappe.throw(_("Could not download image: {0}").format(str(exc)))
 
-	content = resp.content
-	if len(content) < 50:
-		frappe.throw(_("Downloaded file is too small to be a valid image"))
-
-	ct = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-	if ct and not ct.startswith("image/") and ct != "application/octet-stream":
-		frappe.throw(_("URL did not return an image (Content-Type: {0})").format(ct))
-
-	if not ct.startswith("image/") and not _is_image_bytes(content):
-		frappe.throw(_("Downloaded bytes do not look like a JPEG, PNG, GIF, or WebP image"))
-
-	path = urlparse(image_url).path or ""
-	base = path.rsplit("/", 1)[-1] if path else ""
-	if not base or "." not in base:
-		ext = ".jpg"
-		if "png" in ct:
-			ext = ".png"
-		elif "webp" in ct:
-			ext = ".webp"
-		elif "gif" in ct:
-			ext = ".gif"
-		base = f"avatar-{frappe.generate_hash(length=8)}{ext}"
+	# Use the verified format, never an extension supplied by the remote host.
+	ext = {"JPEG": "jpg", "PNG": "png", "GIF": "gif", "WEBP": "webp"}[image_format]
+	base = f"avatar-{frappe.generate_hash(length=8)}.{ext}"
 
 	file_doc = save_file(base, content, doc.doctype, doc.name, is_private=0, df="image")
 	_sync_mobile_app_user_image_field(doc.name, file_doc)

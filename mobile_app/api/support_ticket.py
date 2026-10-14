@@ -261,8 +261,10 @@ def get_support_tickets(mobile_app_user: str) -> dict[str, Any]:
 
 
 @frappe.whitelist(allow_guest=True)
-def send_support_reply(mobile_app_user: str, ticket_name: str, message: str, ticket_doctype: str = "App Support Ticket") -> dict[str, Any]:
+def send_support_reply(mobile_app_user: str, ticket_name: str, message: str, ticket_doctype: str = "App Support Ticket", _summary=False) -> dict[str, Any]:
 	_require_mobile_app_token()
+	if _summary and not _authenticated():
+		frappe.throw(_("Login required"), frappe.PermissionError)
 	message = (message or "").strip()
 	if not message:
 		frappe.throw(_("Message is required"))
@@ -289,6 +291,10 @@ def send_support_reply(mobile_app_user: str, ticket_name: str, message: str, tic
 	_mark_ticket_user_messages_read(ticket.name, ticket_doctype)
 	# Message insertion updates ticket activity; avoid saving the stale document.
 
+	if _summary:
+		from mobile_app.api.desk_support import ticket_summary
+		return {"ticket": ticket_summary(doc, ticket_doctype, ticket.name)}
+
 	updated = next((row for row in _ticket_rows(doc) if row["name"] == ticket.name and row["ticket_doctype"] == ticket_doctype), None)
 	return {"ticket": updated, "tickets": _ticket_rows(doc)}
 
@@ -306,8 +312,10 @@ def mark_support_ticket_read(mobile_app_user: str, ticket_name: str, ticket_doct
 
 
 @frappe.whitelist(allow_guest=True)
-def set_support_ticket_status(mobile_app_user: str, ticket_name: str, status: str, ticket_doctype: str = "App Support Ticket") -> dict[str, Any]:
+def set_support_ticket_status(mobile_app_user: str, ticket_name: str, status: str, ticket_doctype: str = "App Support Ticket", _summary=False) -> dict[str, Any]:
 	_require_mobile_app_token()
+	if _summary and not _authenticated():
+		frappe.throw(_("Login required"), frappe.PermissionError)
 	status = (status or "").strip()
 	if status not in SUPPORT_TICKET_STATUSES:
 		frappe.throw(_("Invalid support ticket status"))
@@ -324,6 +332,10 @@ def set_support_ticket_status(mobile_app_user: str, ticket_name: str, status: st
 	elif status == "Closed" and not ticket.resolved_at:
 		ticket.resolved_at = now_datetime()
 	ticket.save()
+
+	if _summary:
+		from mobile_app.api.desk_support import ticket_summary
+		return {"ticket": ticket_summary(doc, ticket_doctype, ticket.name)}
 
 	updated = next((row for row in _ticket_rows(doc) if row["name"] == ticket.name and row["ticket_doctype"] == ticket_doctype), None)
 	return {"ticket": updated, "tickets": _ticket_rows(doc)}
@@ -350,6 +362,10 @@ def delete_support_ticket(mobile_app_user: str, ticket_name: str, ticket_doctype
 
 @frappe.whitelist()
 def get_desk_support_inbox(start=0, status=None, search=None, ticket_name=None, ticket_doctype=None, category=None):
+    return _desk_support_inbox(start, status, search, ticket_name, ticket_doctype, category)
+
+
+def _desk_support_inbox(start=0, status=None, search=None, ticket_name=None, ticket_doctype=None, category=None, summaries=False):
     """Bounded, permission-scoped inbox for both existing ticket integrations."""
     if not _authenticated():
         frappe.throw(_("Login required"), frappe.PermissionError)
@@ -407,7 +423,12 @@ def get_desk_support_inbox(start=0, status=None, search=None, ticket_name=None, 
         except frappe.PermissionError:
             continue
         allowed = [name for name in names if _ticket_belongs_to_user(frappe.get_doc(doctype, name), user, doctype)]
-        for ticket in _source_rows(user, doctype, allowed):
+        if summaries:
+            from mobile_app.api.desk_support import summary_rows
+            rows = summary_rows(user, doctype, allowed)
+        else:
+            rows = _source_rows(user, doctype, allowed)
+        for ticket in rows:
             ticket["mobile_app_user"] = user.name
             ticket["user_name"] = user.full_name or user.name
             ticket["can_mark_read"] = bool(frappe.has_permission(doctype, "write", doc=frappe.get_doc(doctype, ticket["name"])) and frappe.has_permission(_source(doctype)[0], "write"))
