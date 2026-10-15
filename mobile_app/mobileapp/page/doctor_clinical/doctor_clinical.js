@@ -52,6 +52,7 @@
             this.render();
             this.canOPD = frappe.session.user === "Administrator" || (frappe.user_roles || []).some(r => ["System Manager", "Appointment Manager", "OPD Staff", "Appointment Receptionist", "Physician", "Healthcare Practitioner", "Mobile App Doctor"].includes(r));
             this.$root.find('[data-action="opd"]').toggle(this.canOPD);
+            this.$root.find('[data-action="settings"]').toggle(!this.opdOnly);
             this.bind();
             frappe.xcall('mobile_app.api.opd_queue.bootstrap').then(boot=>{
                 this.$root.find('.ac-branch-filter').html('<option value="">All branches</option>'+boot.clinics.map(c=>`<option value="${esc(c.name)}">${esc(c.clinic_name)}</option>`).join(''));
@@ -87,6 +88,7 @@
                     <button class="ac-rail-link" data-action="encounters" aria-label="Patient Encounter" title="Patient Encounter">${clinicIcon("encounters")}</button>
                     <button class="ac-rail-link" data-action="doctors" aria-label="Doctors" title="Doctors">${clinicIcon("doctors")}</button>
                 <button class="ac-rail-link" data-action="opd" aria-label="OPD tokens and rooms" title="OPD tokens and rooms">OPD</button>
+                    <button class="ac-rail-link" data-action="settings" aria-label="Settings" title="Settings" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:10px;flex-shrink:0"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m9 3-.6 2.2-2 .9-2-.7-2 3.4 1.5 1.6-.2 2.2L2 14l2 3.4 2.1-.5 1.8 1.3.4 2.3h4l.6-2.2 2-.9 2 .7 2-3.4-1.5-1.6.2-2.2 1.7-1.4-2-3.4-2.1.5-1.8-1.3L13 3Z"/><circle cx="11" cy="12" r="3"/></svg><span>Settings</span></button>
                 </nav>
                 <main class="ac-main">
                     <header class="ac-topbar"><div><h1>Appointment Calendar</h1><span class="ac-subtitle">Bookings, approvals and patient queue</span></div>
@@ -128,6 +130,15 @@
             this.directory = new mobile_app.DoctorDirectory(this, this.$directory);
             this.$opd = $('<section class="ac-opd-view" hidden aria-label="OPD tokens and rooms"></section>').appendTo(this.$root.find(".ac-main"));
             this.opd = new mobile_app.OPDPortal(this.$opd[0], false, this);
+            this.$settings = $('<section class="ac-settings-view" hidden aria-label="Settings"></section>').appendTo(this.$root.find(".ac-main"));
+            this.$settings.on('click','[data-setting]',async event=>{
+                const action=$(event.currentTarget).attr('data-setting');
+                if(action.startsWith('disease-')) return this.editDisease(action,$(event.currentTarget));
+                const clinic=this.$settings.find('[data-settings-branch]').val();
+                if(!clinic && action!=='add-branch' && action!=='manage-branches') return frappe.msgprint('Select a branch first.');
+                this.opd.clinic=clinic || null;
+                await this.opd.action(action,$(event.currentTarget));
+            });
             this.$cal[0].style.setProperty("--ac-slot-height", `${30 * this.zoom / 100}px`);
         }
         bind() {
@@ -354,7 +365,7 @@
 
         }
         async fetch(force = false, background = false) {
-            if (["doctors", "opd"].includes(this.section)) return;
+            if (["doctors", "opd", "settings"].includes(this.section)) return;
             if (!this.range || !activeRoute() || !$(this.wrapper).is(":visible")) return;
             const {start, end} = this.range;
             const rangeKey = `${start.format("YYYY-MM-DD")}:${end.format("YYYY-MM-DD")}`;
@@ -539,6 +550,7 @@
                     {fieldname:'reason',label:'Reason',fieldtype:'Small Text',reqd:1}
                 ],async values=>{await frappe.xcall('mobile_app.api.opd_queue.assign_appointment_branch',{...values,doctype:appointment.source_doctype,name:appointment.name,request_id:crypto.randomUUID()});this.close();this.revisions?.clear();this.fetch(true);},'Appointment branch','Save'));return;
             }
+            if (action === "settings") return this.directory.leaveDraft(() => this.switchSection("settings"));
             if (action === "opd") return this.directory.leaveDraft(() => this.switchSection("opd"));
             if (action === "encounters" && this.section === "opd" && this.opd.dirty) return frappe.confirm("Discard unsaved OPD setup changes?", () => {this.opd.dirty = false; this.action(action, button);});
             if (action === "check_in" && this.selected && !this.selected.online) return mobile_app.opd_checkin(this.selected, () => { this.close(); this.fetch(true); });
@@ -599,20 +611,55 @@
             }
             this.section = section;
             if (section !== "opd" && frappe.get_route()[1] === "room") frappe.set_route("doctor-clinical");
-            const doctors = section === "doctors", opd = section === "opd";
-            if (doctors || opd) {
+            const doctors = section === "doctors", opd = section === "opd", settings = section === "settings";
+            if (doctors || opd || settings) {
                 this.calendarXHR?.abort(); ++this.request;
                 this.loading = false; this.loadingRange = null;
             }
-            this.$root.find(".ac-main").children().not(this.$directory).not(this.$opd).toggleClass("dd-hidden", doctors || opd);
+            this.$root.find(".ac-main").children().not(this.$directory).not(this.$opd).not(this.$settings).toggleClass("dd-hidden", doctors || opd || settings);
             this.$directory.prop("hidden", !doctors);
             this.$opd.prop("hidden", !opd);
+            this.$settings.prop("hidden", !settings);
             this.$root.find(".ac-rail-link").removeClass("active").removeAttr("aria-current")
                 .filter(`[data-action="${section}"]`).addClass("active").attr("aria-current", "page");
             if (!opd) this.opd.hide();
-            if (opd) this.opd.show();
+            if (settings) this.showSettings();
+            else if (opd) this.opd.show();
             else if (doctors) this.directory.show();
             else {this.$cal.fullCalendar("render"); this.fetch(true);}
+        }
+        async editDisease(action, button) {
+            const name=this.diseaseCatalogue.names[Number(button.attr('data-index'))];
+            const revision=this.diseaseCatalogue.revision;
+            const save=async (operation, value, replacement)=>{
+                button.prop('disabled',true);
+                try {
+                    await frappe.xcall('mobile_app.disease_settings.update',{action:operation,name:value,new_name:replacement,revision});
+                    await this.showSettings();
+                } finally {button.prop('disabled',false);}
+            };
+            if(action==='disease-add') return save('add',this.$settings.find('#mobile-disease-name').val());
+            if(action==='disease-rename') return frappe.prompt([{fieldname:'name',label:'Disease name',fieldtype:'Data',reqd:1,default:name}],values=>save('rename',name,values.name),'Rename disease','Save');
+            if(action==='disease-delete') return frappe.confirm(`Delete ${esc(name)}?`,()=>save('delete',name));
+        }
+        async showSettings() {
+            this.$settings.html('<header class="ac-topbar"><div><h1>Settings</h1><span class="ac-subtitle">Diseases, branches and token WhatsApp</span></div></header><div class="ac-settings-content"><p role="status">Loading settings...</p></div>');
+            try {
+                const boot=await frappe.xcall('mobile_app.api.opd_queue.bootstrap');
+                this.diseaseCatalogue=await frappe.xcall('mobile_app.disease_settings.get_settings');
+                if(this.section!=='settings') return;
+                this.opd.boot=boot;
+                const selected=boot.clinics.some(c=>c.name===this.opd.clinic)?this.opd.clinic:boot.clinics[0]?.name;
+                const button=(action,label)=>`<button class="ac-btn" data-setting="${action}">${label}</button>`;
+                this.$settings.find('.ac-settings-content').html(`
+                    <section class="dd-about"><h3>Disease list</h3><p>Create the diseases available for selection in each doctor's profile.</p>
+                    ${this.diseaseCatalogue.can_manage?'<label for="mobile-disease-name">Disease name</label><input id="mobile-disease-name" class="form-control" maxlength="140" placeholder="Enter a disease name">'+button('disease-add','Add disease'):''}
+                    <div role="list">${this.diseaseCatalogue.names.map((name,index)=>`<div role="listitem" style="display:flex;align-items:center;gap:12px;margin-top:12px"><span style="flex:1">${esc(name)}</span>${this.diseaseCatalogue.can_manage?`<button class="ac-btn" data-setting="disease-rename" data-index="${index}">Rename</button><button class="ac-btn" data-setting="disease-delete" data-index="${index}">Delete</button>`:''}</div>`).join('')||'<p>No diseases yet. Add the first disease above.</p>'}</div></section>
+                    ${boot.branch_admin?`<section class="dd-about"><h3>Branches</h3><label>Branch <select class="form-control" data-settings-branch>${boot.clinics.map(c=>`<option value="${esc(c.name)}" ${c.name===selected?'selected':''}>${esc(c.clinic_name)}</option>`).join('')}</select></label><div>${button('add-branch','Add branch')}${button('manage-branches','Manage branches')}${button('edit-branch','Branch settings')}</div></section>
+                    <section class="dd-about"><h3>Token WhatsApp</h3><p>Configure token notifications for the branch selected above.</p>${button('token-whatsapp','Token WhatsApp settings')}</section>`:'<p>Branch and WhatsApp settings are available to branch administrators.</p>'}`);
+            } catch(error) {
+                this.$settings.find('.ac-settings-content').html('<p role="alert">Unable to load settings. Reopen Settings to retry.</p>');
+            }
         }
         show() {
             const route=frappe.get_route();
@@ -625,6 +672,7 @@
             this.showTimer = setTimeout(() => {
                 if (!activeRoute()) return;
                 if (this.section === "opd") {this.opd.show(); return;}
+                if (this.section === "settings") {this.showSettings(); return;}
                 if (this.section === "doctors") {this.directory.show(); return;}
                 this.drawing = true;
                 this.$cal.fullCalendar("render");

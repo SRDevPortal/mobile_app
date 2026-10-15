@@ -9,10 +9,9 @@
  "fields": [
   {
    "fieldname": "disease",
-   "fieldtype": "Link",
+   "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Disease",
-   "options": "DPT Disease",
    "reqd": 1
   }
  ],

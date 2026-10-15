@@ -32,13 +32,15 @@ def setup_practitioner_diseases():
 
     # Keep the existing child table and field names when moving from the old app.
     # Reloading the metadata transfers ownership without deleting selected rows.
+    setup_disease_list()
     frappe.reload_doc("mobileapp", "doctype", "sr_practitioner_disease")
     create_custom_fields({
         "Healthcare Practitioner": [{
             "fieldname": "sr_diseases",
             "label": "Diseases",
-            "fieldtype": "Table MultiSelect",
+            "fieldtype": "Table",
             "options": "SR Practitioner Disease",
+            "hidden": 1,
             "insert_after": "gender",
             "description": "Select the diseases this practitioner treats.",
             "module": "MobileApp",
@@ -94,3 +96,8 @@ def setup_practitioner_diseases():
 
     frappe.clear_cache(doctype="SR Practitioner Disease")
     frappe.clear_cache(doctype="Healthcare Practitioner")
+
+
+def setup_disease_list():
+    from mobile_app.disease_settings import migrate
+    migrate()

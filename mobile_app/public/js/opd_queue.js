@@ -183,7 +183,7 @@ frappe.provide('mobile_app');
         shell(){
             const title=this.display?'Please wait for your token to be called':'OPD Patient Flow';
             this.$root.html(`<header class="opd-head"><div><h1>${title}</h1><p>${esc(this.boot.clinics.find(c=>c.name===this.clinic)?.clinic_name)}</p><label>Branch <select data-opd-branch aria-label="OPD branch">${this.boot.clinics.map(c=>`<option value="${esc(c.name)}" ${c.name===this.clinic?'selected':''}>${esc(c.clinic_name)}</option>`).join('')}</select></label></div><div class="opd-actions"><span class="opd-connection"></span>${this.display?btn('sound','Enable sound')+btn('fullscreen','Full screen'):(this.host?.opdOnly?'':btn('calendar','Appointment calendar'))}${btn('refresh','Refresh')}</div></header>
-                ${this.display?'':`<nav class="opd-nav">${btn('queue','OPD Queue')}${btn('room','My OPD')}${this.boot.manager?btn('setup','OPD Setup'):''}${btn('tv','Waiting-Room Display')}<details class="opd-branch-menu"><summary class="opd-btn">Branch <span aria-hidden="true">&#9662;</span></summary><div class="opd-branch-menu-items">${this.boot.branch_admin?btn('add-branch','Add branch')+btn('manage-branches','Manage branches')+btn('edit-branch','Branch settings'):''}${this.boot.branch_admin?btn('token-whatsapp','Token WhatsApp'):''}${btn('branch-summary','Branch summary')}</div></details></nav>`}<div class="opd-content"><div class="opd-empty">Loading...</div></div>`);
+                ${this.display?'':`<nav class="opd-nav">${btn('queue','OPD Queue')}${btn('room','My OPD')}${this.boot.manager?btn('setup','OPD Setup'):''}${btn('tv','Waiting-Room Display')}${btn('branch-summary','Branch summary')}</nav>`}<div class="opd-content"><div class="opd-empty">Loading...</div></div>`);
             this.$root.find(`[data-opd="${this.section}"]`).addClass('active');this.connection(!!frappe.realtime.socket?.connected);
         }
         async refresh(){
@@ -329,7 +329,7 @@ frappe.provide('mobile_app');
                 try{
                     const result=await this.mutate('save_branch',{branch_name:values.branch_name,code:values.code,address:values.address,enabled:values.enabled,copy_setup:values.copy_setup,members:String(values.members||'').split(',').map(x=>x.trim()).filter(Boolean),branch:branch.name,expected_revision:branch.revision});
                     if(edit){const current=await read('get_setup',{clinic:this.clinic});await this.mutate('save_setup',{expected_version:current.config_version,rooms:current.rooms,routes:current.routes,purposes:current.purposes,display_users:String(values.display_users||'').split(',').map(x=>x.trim()).filter(Boolean)});}
-                    d.hide();this.clinic=values.enabled?result.branch:null;this.boot=await read('bootstrap');this.clinic ||= this.boot.clinics[0]?.name;this.selectedRoom=null;this.section='setup';await this.show();
+                    d.hide();this.clinic=values.enabled?result.branch:null;this.boot=await read('bootstrap');this.clinic ||= this.boot.clinics[0]?.name;this.selectedRoom=null;this.section='setup';if(this.host?.section==='settings') await this.host.showSettings();else await this.show();
                 }finally{d.enable_primary_action();}
             }});d.show();
         }

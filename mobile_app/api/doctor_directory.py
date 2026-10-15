@@ -375,3 +375,20 @@ def set_about_doctor(practitioner_id, doctor_modified, about_doctor):
     doc.reload()
     doc.notify_update()
     return {"about_doctor": doc.custom_about_doctor or "", "modified": str(doc.modified)}
+
+
+@frappe.whitelist(methods=["POST"])
+def set_diseases(practitioner_id, doctor_modified, diseases):
+    doc = _lock_doctor(practitioner_id, doctor_modified)
+    diseases = frappe.parse_json(diseases) if isinstance(diseases, str) else diseases
+    if not isinstance(diseases, list) or any(not isinstance(value, str) for value in diseases):
+        frappe.throw("Select diseases from the Mobile App disease list.")
+    names = list(dict.fromkeys(diseases))
+    from mobile_app.disease_settings import _read
+    available = _read()
+    for name in names:
+        if name not in available:
+            frappe.throw("Select diseases from the Mobile App disease list.")
+    doc.set("sr_diseases", [{"disease": name} for name in names])
+    doc.save()
+    return _details(doc)

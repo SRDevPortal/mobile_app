@@ -120,7 +120,7 @@ frappe.provide("mobile_app");
             this.$root.find(".dd-detail").prop("hidden", false).html(`<section class="dd-profile-card"><div class="dd-profile">${avatar(d, "dd-profile-avatar")}<div><h2>${esc(d.name)}</h2>
                 <p>${esc([d.qualification, d.hospital].filter(Boolean).join(" · ") || "Healthcare practitioner")}</p>
                 <div class="dd-specialties" aria-label="Diseases">${(d.diseases || []).length ? d.diseases.map(disease => `<span>${esc(disease)}</span>`).join("") : '<span>No diseases selected</span>'}</div></div>
-                <span class="dd-status">${esc(d.status)}</span><button class="ac-btn" data-dd="profile">${d.can_edit ? "Edit doctor details" : "View doctor details"}</button></div>
+                ${d.can_edit ? '<button class="ac-btn" data-dd="edit-diseases">Select diseases</button>' : ""}<span class="dd-status">${esc(d.status)}</span><button class="ac-btn" data-dd="profile">${d.can_edit ? "Edit doctor details" : "View doctor details"}</button></div>
                 <div class="dd-contact"><span>Phone: ${esc(d.phone || "Not provided")}</span><span>Email: ${esc(d.email || "Not provided")}</span></div></section>
                 <div class="dd-summary">
                 <section class="dd-about" aria-labelledby="dd-about-title">
@@ -295,6 +295,7 @@ frappe.provide("mobile_app");
         }
         action(action) {
             if (this.saving) return;
+            if (action === "edit-diseases") return this.editDiseases();
             if (action === "edit-about") return this.editAbout();
             if (action === "edit-metrics") return this.editMetrics();
             if (action === "save-appointment-modes") return this.leaveDraft(() => this.saveAppointmentModes());
@@ -356,6 +357,28 @@ frappe.provide("mobile_app");
                     }
                 }
             });
+            dialog.show();
+        }
+        async editDiseases() {
+            const doctor = this.data.doctor;
+            if (!doctor.can_edit) return;
+            const catalogue = await frappe.xcall("mobile_app.disease_settings.get_settings");
+            const rows = catalogue.names.map(name=>({name}));
+            const dialog = new frappe.ui.Dialog({title:"Select diseases", fields:[{
+                fieldname:"diseases", label:"Diseases", fieldtype:"MultiCheck",
+                options:rows.map(row=>({label:row.name, value:row.name, checked:doctor.diseases.includes(row.name)}))
+            }], primary_action_label:"Save", primary_action:async values=>{
+                dialog.disable_primary_action();
+                try {
+                    const result = await frappe.xcall(`${API}.set_diseases`, {practitioner_id:doctor.id, doctor_modified:doctor.modified, diseases:values.diseases || []});
+                    Object.assign(doctor,result);
+                    const listed=this.doctors.find(item=>item.id===doctor.id);
+                    if(listed) Object.assign(listed,result);
+                    this.$root.find('.dd-specialties').html(result.diseases.map(name=>`<span>${esc(name)}</span>`).join('') || '<span>No diseases selected</span>');
+                    this.renderDiseaseFilter(); this.renderList(); dialog.hide();
+                    frappe.show_alert({message:"Diseases saved",indicator:"green"});
+                } finally {dialog.enable_primary_action();}
+            }});
             dialog.show();
         }
         editAbout() {
