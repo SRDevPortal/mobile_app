@@ -14,3 +14,19 @@ def refresh_module_map():
     frappe.cache.delete_value("app_modules")
     frappe.cache.delete_value("installed_app_modules")
     frappe.setup_module_map()
+
+
+def ensure_workspace():
+    """Restore a missing Desk workspace without replacing site customizations."""
+    if frappe.db.exists("Workspace", "Mobile App"):
+        return
+
+    from frappe.modules.import_file import import_file_by_path
+
+    import_file_by_path(
+        frappe.get_app_path(
+            "mobile_app", "mobileapp", "workspace", "mobile_app", "mobile_app.json"
+        ),
+        force=True,
+    )
+    frappe.clear_cache()

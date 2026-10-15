@@ -34,6 +34,17 @@ to the user and rejects foreign or repeated IDs. Omit `name` only for new profil
 Phone-owned history remains stored and is not automatically claimed by an app
 account. See `wa_chat_hub/docs/MOBILE_APP_CHAT_IDENTITY.md` for integration details.
 
+### Desk workspace
+
+The app includes a public **Mobile App** workspace with shortcuts to mobile users,
+appointments, support tickets, and the appointment calendar. Access to each
+destination still follows its existing permissions.
+
+After deploying this code, run `bench --site <site-name> migrate` and reload Desk.
+The install and migration hooks also restore the workspace when it is missing,
+including sites where the old workspace import patch already ran without its
+JSON file. The repair hook leaves an existing workspace unchanged.
+
 ### Contributing
 
 This app uses `pre-commit` for code formatting and linting. Please [install pre-commit](https://pre-commit.com/#installation) and enable it for this repository:

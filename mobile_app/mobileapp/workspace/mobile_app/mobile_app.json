@@ -1,0 +1,32 @@
+{
+ "charts": [],
+ "content": "[{\"id\":\"mobile-app-header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">Mobile App</span>\",\"col\":12}},{\"id\":\"mobile-app-users\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Mobile App User\",\"col\":3}},{\"id\":\"mobile-app-appointments\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Mobile App Appointments\",\"col\":3}},{\"id\":\"mobile-app-support\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Support Tickets\",\"col\":3}},{\"id\":\"mobile-app-calendar\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Appointment Calendar\",\"col\":3}}]",
+ "creation": "2026-10-15 00:00:00.000000",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "hide_custom": 0,
+ "icon": "users",
+ "idx": 0,
+ "indicator_color": "blue",
+ "is_hidden": 0,
+ "label": "Mobile App",
+ "links": [],
+ "modified": "2026-10-15 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "MobileApp",
+ "name": "Mobile App",
+ "number_cards": [],
+ "owner": "Administrator",
+ "public": 1,
+ "quick_lists": [],
+ "roles": [],
+ "sequence_id": 40,
+ "shortcuts": [
+  {"color": "Green", "doc_view": "List", "label": "Mobile App User", "link_to": "Mobile App User", "type": "DocType"},
+  {"color": "Blue", "doc_view": "List", "label": "Mobile App Appointments", "link_to": "Mobile App Appointment", "type": "DocType"},
+  {"color": "Purple", "doc_view": "List", "label": "Support Tickets", "link_to": "App Support Ticket", "type": "DocType"},
+  {"color": "Orange", "label": "Appointment Calendar", "link_to": "doctor-clinical", "type": "Page"}
+ ],
+ "title": "Mobile App"
+}

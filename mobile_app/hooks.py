@@ -10,12 +10,14 @@ before_migrate = "mobile_app.install.refresh_module_map"
 
 after_install = [
     "mobile_app.install.refresh_module_map",
+    "mobile_app.install.ensure_workspace",
     "mobile_app.diet_chart_setup.after_migrate",
     "mobile_app.calendar_setup.after_migrate",
     "mobile_app.opd_setup.after_migrate",
     "mobile_app.practitioner_setup.setup_practitioner_diseases",
 ]
 after_migrate = [
+    "mobile_app.install.ensure_workspace",
     "mobile_app.diet_chart_setup.after_migrate",
     "mobile_app.calendar_setup.after_migrate",
     "mobile_app.opd_setup.after_migrate",
