@@ -5,6 +5,9 @@ app_description = "Mobile app data storage"
 app_email = "admin@example.com"
 app_license = "mit"
 
+before_install = "mobile_app.install.refresh_module_map"
+before_migrate = "mobile_app.install.refresh_module_map"
+
 after_install = [
     "mobile_app.install.refresh_module_map",
     "mobile_app.diet_chart_setup.after_migrate",

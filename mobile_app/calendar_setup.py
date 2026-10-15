@@ -15,6 +15,10 @@ def after_migrate():
 def setup_encounter_status():
     if not frappe.db.exists("DocType", "Patient Encounter"):
         return
+    # The appointment encounter integration is optional on standard Healthcare sites.
+    # Do not query a clinic app's custom field until that app has created it.
+    if not frappe.get_meta("Patient Encounter").has_field("sr_encounter_type"):
+        return
     from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
     from mobile_app.api.appointment_calendar import (
         APPOINTMENT_STATUS_FIELD, LEGACY_STATUSES, WORKFLOW, _status, _workflow,

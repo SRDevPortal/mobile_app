@@ -12,6 +12,15 @@ bench get-app $URL_OF_THIS_REPO --branch develop
 bench install-app mobile_app
 ```
 
+If an earlier installation stopped with `Module mobileapp not found` or a missing
+`Mobile Appointment Workflow` table, deploy the corrected code and take a site
+backup first. Check `bench --site <site> list-apps`: if `mobile_app` is already
+listed, run `bench --site <site> migrate` to finish schema synchronization and
+setup. Otherwise run `bench --site <site> install-app mobile_app`. Do not uninstall
+an existing app or drop its tables to retry setup. Finish deployment with
+`bench build --app mobile_app`, clear the site's cache, and restart the web and
+worker processes using the hosting environment's normal deployment procedure.
+
 ### AI chat integration
 
 AI chat is served by `wa_chat_hub.api.mobile_app`. Every channel with Channel Type

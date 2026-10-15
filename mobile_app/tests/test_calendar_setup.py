@@ -17,6 +17,8 @@ class TestCalendarSetup(unittest.TestCase):
         self.db = stack.enter_context(patch.object(frappe, "db", Mock(), create=True))
         self.db.exists.return_value = True
         self.get_doc = stack.enter_context(patch.object(frappe, "get_doc"))
+        self.get_meta = stack.enter_context(patch.object(frappe, "get_meta"))
+        self.get_meta.return_value.has_field.return_value = True
         self.logger = stack.enter_context(patch.object(frappe, "logger"))
         stack.enter_context(patch.object(api, "_", side_effect=lambda text: text))
         self.throw = stack.enter_context(
@@ -35,6 +37,17 @@ class TestCalendarSetup(unittest.TestCase):
         self.clinic.add_comment.assert_not_called()
         self.throw.assert_not_called()
         self.logger.return_value.warning.assert_called_once()
+
+    def test_standard_healthcare_install_skips_optional_encounter_backfill(self):
+        self.get_meta.return_value.has_field.return_value = False
+        with (
+            patch("frappe.custom.doctype.custom_field.custom_field.create_custom_fields") as fields,
+            patch.object(frappe, "get_all") as get_all,
+        ):
+            calendar_setup.setup_encounter_status()
+        fields.assert_not_called()
+        get_all.assert_not_called()
+        self.db.sql.assert_not_called()
 
     def test_setup_skips_missing_appointment_without_loading_it(self):
         self.db.exists.side_effect = lambda doctype, name: doctype == "DocType"

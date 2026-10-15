@@ -13,7 +13,6 @@ def after_migrate():
     for role in ('OPD Staff','OPD Display'):
         if not frappe.db.exists('Role',role):
             frappe.get_doc({'doctype':'Role','role_name':role,'desk_access':1}).insert(ignore_permissions=True)
-    for fields in (['opd_clinic','opd_status'],['opd_patient']):frappe.db.add_index(store.WORKFLOW,fields)
     if not frappe.db.sql('SELECT value FROM `tabSingles` WHERE doctype=%s AND field=%s',(store.SETTINGS,store.FIELD)):
         frappe.db.set_single_value(store.SETTINGS,store.FIELD,frappe.as_json({k:{} for k in store.COLLECTIONS.values()}))
     setup_partitioned_storage()
@@ -54,6 +53,9 @@ def setup_partitioned_storage():
     import json
     frappe.reload_doc('mobileapp', 'doctype', 'opd_state_record')
     frappe.reload_doc('mobileapp', 'doctype', 'mobile_appointment_workflow')
+    # Fresh installs and interrupted retries must sync tables before indexing them.
+    for fields in (['opd_clinic', 'opd_status'], ['opd_patient']):
+        frappe.db.add_index(store.WORKFLOW, fields)
     frappe.db.add_index(store.STATE, ['record_type', 'clinic'], 'opd_state_type_clinic')
     frappe.db.add_index(store.WORKFLOW, ['opd_clinic', 'opd_visit_date'], 'opd_clinic_visit_date')
     frappe.db.add_index(store.WORKFLOW, ['opd_clinic', 'opd_status', 'opd_visit_date'], 'opd_clinic_status_date')
