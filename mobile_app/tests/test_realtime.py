@@ -48,3 +48,20 @@ class TestRealtime(TestCase):
     def assert_change_queued(self):
         self.assertIn(["mobile_app_data_changed", {"doctype": "Mobile App User"}, "all"],
             frappe.local._realtime_log)
+
+
+class TestCalendarNotifications(TestCase):
+    def test_non_appointment_does_not_invalidate_calendar(self):
+        with patch('frappe.publish_realtime') as publish:
+            notify_change(frappe._dict(doctype='Patient Encounter',sr_encounter_type='Followup',encounter_date='2026-10-17'))
+        self.assertEqual(publish.call_args.args[1],{'doctype':'Patient Encounter','calendar_dates':[]})
+
+    def test_rescheduling_invalidates_both_dates_without_identity(self):
+        from unittest.mock import Mock
+        doc=Mock(doctype='Patient Encounter')
+        current={'sr_encounter_type':'Appointment','pe_appointment_date':'2026-10-18'}
+        doc.get.side_effect=current.get
+        doc.get_doc_before_save.return_value=frappe._dict(doctype='Patient Encounter',sr_encounter_type='Appointment',pe_appointment_date='2026-10-17')
+        with patch('frappe.publish_realtime') as publish:
+            notify_change(doc)
+        self.assertEqual(publish.call_args.args[1],{'doctype':'Patient Encounter','calendar_dates':['2026-10-17','2026-10-18']})

@@ -21,28 +21,21 @@ def setup_encounter_status():
         return
     from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
     from mobile_app.api.appointment_calendar import (
-        APPOINTMENT_STATUS_FIELD, LEGACY_STATUSES, WORKFLOW, _status, _workflow,
-        _sync_encounter_status, _sync_clinic_status,
+        APPOINTMENT_STATUS_FIELD, WORKFLOW,
     )
 
     create_custom_fields({"Patient Encounter": [{
         "fieldname": APPOINTMENT_STATUS_FIELD, "label": "Appointment Status",
-        "fieldtype": "Select", "options": "\nPending\nApproved\nCancelled\nChecked In",
+        "fieldtype": "Select", "options": "\nPending\nApproved\nCancelled\nChecked In\nCompleted",
         "insert_after": "sr_encounter_type", "read_only": 1, "allow_on_submit": 1,
         "no_copy": 1, "in_standard_filter": 1,
         "depends_on": "eval:doc.sr_encounter_type == 'Appointment'",
-        "description": "Updated by Appointment Calendar. Checked In is the final appointment step.",
+        "description": "Independent Mobile App appointment workflow. Updated by authorized staff.",
     }]})
     if not frappe.db.exists("DocType", WORKFLOW):
         return
-    # Retain timestamps and audit comments; only normalize obsolete queue states.
-    for old, new in LEGACY_STATUSES.items():
-        frappe.db.sql(f"UPDATE `tab{WORKFLOW}` SET workflow_status=%s WHERE workflow_status=%s", (new, old))
-    for name in frappe.get_all("Patient Encounter", filters={"sr_encounter_type": "Appointment"}, pluck="name"):
-        doc = frappe.get_doc("Patient Encounter", name)
-        status = _status(doc, _workflow(doc.doctype, doc.name))
-        _sync_encounter_status(doc, status)
-        _sync_clinic_status(doc, status, skip_invalid_links=True)
+    # Existing clinical-derived values require review, not a migration-time rewrite.
+    # New saves mirror only the independent workflow into the read-only display field.
 
 
 def setup_calendar_indexes():

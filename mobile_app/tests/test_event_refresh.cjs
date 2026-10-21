@@ -105,3 +105,15 @@ test("record notifications bypass the list's recent identical-request cache", as
     list.patch_refresh_and_load_lib(); h.change(); await h.flush();
     assert.equal(calls, 1);
 });
+
+
+test("calendar date filter ignores unrelated days and accepts moved bookings", async () => {
+    const h=harness();let calls=0;
+    h.api.watch('calendar',['Patient Encounter'],()=>true,()=>{calls++;},
+        event=>!Array.isArray(event.calendar_dates)||event.calendar_dates.includes('2026-10-17'));
+    h.events.emit('mobile_app_data_changed',{doctype:'Patient Encounter',calendar_dates:[]});
+    h.events.emit('mobile_app_data_changed',{doctype:'Patient Encounter',calendar_dates:['2026-10-18']});
+    await h.flush();assert.equal(calls,0);
+    h.events.emit('mobile_app_data_changed',{doctype:'Patient Encounter',calendar_dates:['2026-10-17','2026-10-18']});
+    await h.flush();assert.equal(calls,1);
+});

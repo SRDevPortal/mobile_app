@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../mobileapp/page/doctor_clinical/doctor_clinical.js'), 'utf8');
-const methods = source.slice(source.indexOf('        renderDoctors() {'), source.indexOf('        renderQueue() {'));
+const methods = source.slice(source.indexOf('        renderDoctors() {'), source.indexOf('        onlineDoctorProfile('));
 const matching = source.slice(source.indexOf('        matches(r,'), source.indexOf('        matchesSearch(r)'));
 function render(selected) {
  let html;

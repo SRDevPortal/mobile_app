@@ -111,3 +111,38 @@
 .opd-slip .opd-route>span br{display:none}
 .opd-slip .opd-route>span strong{display:block}
 .opd-slip .opd-route-separator{align-self:center}
+
+/* A single call uses the entire available waiting-room display. */
+.opd-tv .opd-tv-grid.opd-tv-single {grid-template-columns:minmax(0,1fr)}
+.opd-tv .opd-tv-single .opd-tv-token {font-size:clamp(64px,min(16cqw,22vh),200px)}
+
+.opd-tv .opd-head>div:first-child {flex:1 1 auto;max-width:none;min-width:0}
+.opd-tv .opd-head h1 {white-space:nowrap;font-size:clamp(14px,3.2vw,30px)}
+@media(max-width:700px){.opd-tv .opd-head>div:first-child{flex-basis:100%}.opd-tv .opd-head h1{font-size:clamp(12px,3.2vw,22px)}}
+/* Keep every active call in one row within the display viewport. */
+.opd-tv .opd-tv-grid {grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);grid-auto-rows:minmax(0,1fr);min-height:0;gap:clamp(8px,1.2vw,24px)}
+.opd-tv .opd-tv-card {min-height:0;min-width:0;padding:clamp(12px,2vh,28px) clamp(8px,1.5vw,24px);box-sizing:border-box}
+.opd-tv-card .opd-badge {font-size:clamp(12px,min(4.5cqw,3vh),24px);padding:8px 14px;flex-shrink:0}
+.opd-tv-card .opd-tv-token {font-size:clamp(24px,min(18cqw,20vh),140px);letter-spacing:-1px;padding:clamp(8px,2vh,24px) 0}
+.opd-tv-card .opd-tv-name {font-size:clamp(14px,min(6cqw,5vh),40px)}
+.opd-tv-card .opd-tv-room {font-size:clamp(12px,min(4.5cqw,3.5vh),26px);margin-top:clamp(8px,2vh,16px)}
+.opd-tv-card>small {font-size:clamp(10px,2cqw,16px)}
+.opd-tv .opd-tv-grid>.opd-empty {grid-column:auto;min-width:0}
+/* Compact waiting-room header leaves more space for active calls. */
+.opd-tv>.opd-head {min-height:0;padding:12px 20px;margin-bottom:12px;gap:12px}
+.opd-tv .opd-head h1 {margin:0}
+@media(max-width:700px){.opd-tv>.opd-head{padding:10px 12px;gap:8px}}
+/* Four simultaneous calls share two rows without growing the viewport. */
+.opd-tv .opd-tv-grid.opd-tv-four {grid-auto-flow:row;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr))}
+.opd-tv .opd-tv-four .opd-tv-card {padding:clamp(8px,1.3vh,16px) 18px}
+.opd-tv .opd-tv-four .opd-badge {font-size:clamp(12px,2vh,20px);padding:5px 14px}
+.opd-tv .opd-tv-four .opd-tv-token {font-size:clamp(28px,min(16cqw,10vh),100px);padding:4px 0}
+.opd-tv .opd-tv-four .opd-tv-name {font-size:clamp(14px,min(5cqw,3vh),30px)}
+.opd-tv .opd-tv-four .opd-tv-room {font-size:clamp(12px,min(4cqw,2.5vh),24px);margin-top:6px}
+/* Prominent patient name and a separate, high-contrast destination row. */
+.opd-tv .opd-tv-card .opd-tv-name {font-size:clamp(20px,min(8cqw,6vh),56px);font-weight:800;line-height:1.15}
+.opd-tv .opd-tv-room {display:flex;flex-direction:column;align-items:center;gap:6px;flex-shrink:0}
+.opd-tv .opd-tv-room .opd-tv-room-tag {display:block;background:#105b4b;color:#fff;border-radius:10px;padding:8px 24px;font-size:clamp(20px,min(7cqw,4.5vh),40px);font-weight:800;line-height:1.15;max-width:100%;overflow-wrap:anywhere}
+.opd-tv .opd-tv-four .opd-tv-name {font-size:clamp(18px,min(6cqw,4vh),42px)}
+.opd-tv .opd-tv-four .opd-tv-room {gap:4px}
+.opd-tv .opd-tv-four .opd-tv-room-tag {font-size:clamp(18px,min(5cqw,3.4vh),34px);padding:6px 20px}

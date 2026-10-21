@@ -174,18 +174,26 @@ def _route_steps(doc):
 
 
 def _route_data(doc):
-    return {k: doc.get(k) for k in ('name', 'department', *ROOM_FIELDS, 'booking_labels', 'revision')} | {'steps':_route_steps(doc)}
+    return {k: doc.get(k) for k in ('name', 'route_name', 'department', *ROOM_FIELDS, 'booking_labels', 'revision')} | {'steps':_route_steps(doc), 'route_name':doc.get('route_name') or doc.get('department') or doc.name}
 
 
-def _visit_data(doc, doctors=None, clinics=None):
+def _visit_data(doc, doctors=None, clinics=None, workflows=None):
     result = {k: doc.get(k) for k in ('name', 'patient', 'patient_name', 'department', 'original_doctor',
         'consultation_doctor', 'visit_date', 'status', 'stage_index', 'priority', 'revision', 'encounter',
         'source_doctype', 'source_name', 'route_version', 'vitals')} | {
+        'route_id':doc.get('route_id') or _value('Route', {'clinic':doc.clinic, 'department':doc.department}, 'name'),
+        'route_name':doc.get('route_name') or doc.department,
         'clinic':doc.clinic, 'clinic_name':clinics.get(doc.clinic) if clinics is not None else _value('Clinic',doc.clinic,'clinic_name'),
         'consultation_doctor_name': (doctors.get(doc.consultation_doctor) if doctors is not None else _value('Healthcare Practitioner', doc.consultation_doctor, 'practitioner_name')) or doc.consultation_doctor,
         'token': (doc.get('token_prefix')+'-' if doc.get('token_prefix') else '')+str(doc.token_number).zfill(3), 'stages': [{k: s.get(k) for k in (
             'stage', 'purpose_id', 'room', 'state', 'queued_at', 'called_at', 'started_at', 'completed_at', 'session')} for s in doc.stages]}
 
+    from mobile_app.api import appointment_calendar as cal
+    workflow = (workflows.get(cal._key(doc.source_doctype, doc.source_name), {}) if workflows is not None else cal._workflow(doc.source_doctype, doc.source_name)) if doc.source_doctype else {}
+    result['appointment_status'] = cal._status(None, workflow) if doc.source_doctype else None
+    result['can_complete_appointment'] = bool(_roles() & cal.RECEPTION_ROLES) and bool(
+        doc.source_doctype and result['appointment_status'] == 'Checked In' and
+        doc.status == 'Completed' and doc.stages and all(s.state == 'Completed' for s in doc.stages))
     return frappe.parse_json(frappe.as_json(result))
 
 
@@ -194,7 +202,11 @@ def _visit_rows(visits):
     doctors = {d.name:d.practitioner_name for d in frappe.get_all('Healthcare Practitioner',
         filters={'name':['in', ids]}, fields=['name','practitioner_name'])} if ids else {}
     clinics = {name:_value('Clinic',name,'clinic_name') for name in {v.clinic for v in visits}}
-    return [_visit_data(v, doctors, clinics) for v in visits]
+    from mobile_app.api import appointment_calendar as cal
+    keys = [cal._key(v.source_doctype, v.source_name) for v in visits if v.source_doctype]
+    workflows = {w.name:w for w in frappe.get_all(cal.WORKFLOW, filters={'name':['in',keys]},
+        fields=['name','workflow_status'])} if keys else {}
+    return [_visit_data(v, doctors, clinics, workflows) for v in visits]
 
 
 @frappe.whitelist()
@@ -348,7 +360,7 @@ def save_setup(clinic, request_id, expected_version, rooms, routes, display_user
         if any(stage.room == room_id for visit in active_visits for stage in visit.stages):
             frappe.throw('This room belongs to an active visit. Finish or reroute those visits before deleting it.')
         if any(room_id == row.get(field) for row in route_inputs for field in ROOM_FIELDS) or any(step.get('room') == room_id for row in route_inputs for step in row.get('steps',[])):
-            frappe.throw('Remove this room from department routes before deleting it.')
+            frappe.throw('Remove this room from room routes before deleting it.')
     ids, room_docs, numbers, practitioner_rooms = {}, {}, set(), {}
     for row in room_inputs:
         number = str(row.get('room_number') or '').strip()
@@ -374,12 +386,14 @@ def save_setup(clinic, request_id, expected_version, rooms, routes, display_user
                 frappe.throw('Reroute unfinished patients before disabling a room or changing its purpose.')
         doc.update({'clinic': clinic, 'room_number': number, 'room_label': str(row.get('room_label') or '')[:140], 'purpose': purpose, 'purpose_id': purpose_id, 'enabled': enabled})
         doc.set('assignments', assignments); _save(doc); ids[key] = doc.name; room_docs[doc.name] = doc
-    departments, retained = set(), set()
+    route_names, retained = set(), set()
     for row in route_inputs:
-        department = row.get('department')
-        if row.get('name') in retained: frappe.throw('A department route may appear only once.')
-        if department in departments or not _exists('Medical Department', department): frappe.throw('Choose a distinct valid department for each route.')
-        departments.add(department); values = {}
+        department = row.get('department')  # Legacy route metadata, never required for new routes.
+        route_name = str(row.get('route_name') or department or '').strip()
+        if row.get('name') in retained: frappe.throw('A room route may appear only once.')
+        if not route_name or len(route_name) > 140 or route_name.casefold() in route_names:
+            frappe.throw('Enter a unique route name of up to 140 characters.')
+        route_names.add(route_name.casefold()); values = {}
         steps=[]
         supplied={x.get('purpose_id'):x.get('room') for x in row.get('steps',[])}
         for field,purpose in zip(ROOM_FIELDS,STAGES):
@@ -391,23 +405,23 @@ def save_setup(clinic, request_id, expected_version, rooms, routes, display_user
             if not selection: continue
             room_id=ids.get(selection)
             if not room_id or not room_docs[room_id].enabled or room_docs[room_id].purpose_id != item['id']:
-                frappe.throw(f"{department}: select an enabled {item['name']} room.")
+                frappe.throw(f"{route_name}: select an enabled {item['name']} room.")
             steps.append({'purpose_id':item['id'],'stage':item['name'],'room':room_id})
-        if not steps: frappe.throw(f'{department}: select at least one room.')
+        if not steps: frappe.throw(f'{route_name}: select at least one room.')
         for field,purpose in zip(ROOM_FIELDS,STAGES):
             values[field]=next((x['room'] for x in steps if x['purpose_id']==purpose),None)
         if not values['consultation_room']:
             values['consultation_room']=next((x['room'] for x in steps if room_docs[x['room']].purpose=='Doctor Consultation'),None)
-        if not values['consultation_room']: frappe.throw(f'{department}: select a consultation room for the booked doctor.')
+        if not values['consultation_room']: frappe.throw(f'{route_name}: select a consultation room for the booked doctor.')
         values['steps']=steps
         doc = _get('Route', row['name'], clinic) if row.get('name') else store.new('Route')
-        doc.update({'clinic': clinic, 'department': department, 'booking_labels': str(row.get('booking_labels') or '')[:1000], **values})
+        doc.update({'clinic': clinic, 'route_name': route_name, 'department': department, 'booking_labels': str(row.get('booking_labels') or '')[:1000], **values})
         _save(doc); retained.add(doc.name)
     for name in _all('Route', filters={'clinic': clinic}, pluck='name'):
         if name not in retained:
             route = _get('Route',name,clinic)
-            if any(v.department == route.department for v in active_visits):
-                frappe.throw('This department route has active visits. Finish or reroute them before deleting it.')
+            if any(v.get('route_id') == route.name or (not v.get('route_id') and v.department == route.department) for v in active_visits):
+                frappe.throw('This room route has active visits. Finish or reroute them before deleting it.')
             store.delete('Route',name)
     for room_id in removed_rooms:
         store.delete('Room',room_id)
@@ -417,7 +431,7 @@ def save_setup(clinic, request_id, expected_version, rooms, routes, display_user
             if consultation.state == 'Completed': continue
             room = room_docs.get(consultation.room)
             if not room or room.purpose != 'Doctor Consultation': continue
-            if room and not any(a.practitioner == visit.consultation_doctor for a in room.assignments): frappe.throw('Reassign waiting patients before removing their consultation doctor from a room.')
+            if consultation.state in ('Called', 'In Progress') and not any(a.practitioner == visit.consultation_doctor for a in room.assignments): frappe.throw('Reassign waiting patients before removing their consultation doctor from a room.')
     if display_users is not None:
         viewers = _json(display_users, list)
         for user in viewers:
@@ -430,13 +444,14 @@ def save_setup(clinic, request_id, expected_version, rooms, routes, display_user
 
 
 def _route(clinic, department, doctor):
-    name = _value('Route', {'clinic': clinic, 'department': department}, 'name')
-    if not name: frappe.throw('Configure a complete room route for this department first.')
+    if not department: frappe.throw('Select a configured OPD room route first.')
+    name = _value('Route', {'clinic': clinic, 'name': department}, 'name') or _value('Route', {'clinic': clinic, 'department': department}, 'name')
+    if not name: frappe.throw('Select a configured OPD room route first.')
     route = _doc('Route', name)
     for step in _route_steps(route):
         room = _get('Room', step['room'], clinic)
         if not room.enabled or (room.get('purpose_id') or room.purpose) != step['purpose_id']:
-            frappe.throw('The department route contains an unavailable room.')
+            frappe.throw('The room route contains an unavailable room.')
     if _value('Healthcare Practitioner', doctor, 'status') != 'Active':
         frappe.throw('Select an active consultation doctor.')
     return route
@@ -461,11 +476,9 @@ def checkin_context(clinic, doctype, name):
     from mobile_app.api import appointment_calendar as cal
     doc = _canonical(doctype, name)
     if not cal._can_read(doc, cal._workflow(doc.doctype, doc.name), cal._context()): frappe.throw('Appointment access denied.', frappe.PermissionError)
-    direct = doc.get('medical_department'); label = str(doc.get('page_url_disease') or '').strip().casefold()
-    matches = [r.department for r in _all('Route', filters={'clinic': clinic}, fields=['department', 'booking_labels'])
-        if label and label in [x.strip().casefold() for x in (r.booking_labels or '').splitlines()]]
-    department = direct or (matches[0] if len(matches) == 1 else None)
-    return {'department': department, 'doctor': cal._doctor(doc)[0], 'patient': doc.get('patient'),
+    routes = _all('Route', filters={'clinic':clinic}, fields=['name'])
+    return {'route_id': routes[0].name if len(routes) == 1 else None,
+        'department': doc.get('medical_department'), 'doctor': cal._doctor(doc)[0], 'patient': doc.get('patient'),
         'patient_name': doc.get('patient_name'), 'visit': find_visit(doc.doctype, doc.name)}
 
 
@@ -534,9 +547,9 @@ def patient_query(doctype, txt, searchfield, start, page_len, filters=None):
 
 @frappe.whitelist(methods=['POST'])
 @_mutation
-def check_in(clinic, request_id, department, doctor, patient=None, patient_details=None,
-             source_doctype=None, source_name=None, expected_status='Approved', reason=None):
-    _require_reception()
+def check_in(clinic, request_id, department=None, doctor=None, patient=None, patient_details=None,
+             source_doctype=None, source_name=None, expected_status='Approved', reason=None, route_id=None):
+    _require_appointment_operator()
     from mobile_app.api import appointment_calendar as cal
     source = _canonical(source_doctype, source_name) if source_doctype else None
     if not source and patient:
@@ -555,7 +568,8 @@ def check_in(clinic, request_id, department, doctor, patient=None, patient_detai
         if source.get('patient'):
             if patient and patient != source.patient: frappe.throw('Use the patient linked to this encounter.')
             patient = source.patient
-    route = _route(clinic, department, doctor)
+    route = _route(clinic, route_id or department, doctor)
+    department = (source.get('medical_department') if source else None) or (frappe.db.get_value('Patient', patient, 'sr_medical_department') if patient else None) or (department if not route_id else None)
     if not patient:
         details = _json(patient_details, dict)
         if not all(str(details.get(k) or '').strip() for k in ('first_name','sex','mobile')): frappe.throw('New patients require name, gender and mobile number.')
@@ -568,7 +582,7 @@ def check_in(clinic, request_id, department, doctor, patient=None, patient_detai
     active = _value('Visit', {'clinic': clinic, 'patient': patient, 'status': 'Active'}, 'name')
     if active:
         existing_visit = _get('Visit', active, clinic)
-        same_route = existing_visit.department == department and existing_visit.consultation_doctor == doctor
+        same_route = (existing_visit.get('route_id') == route.name or (not existing_visit.get('route_id') and existing_visit.department == route.get('department'))) and existing_visit.consultation_doctor == doctor
         if not source and same_route:
             return _visit_data(existing_visit)
         if source and same_route and not existing_visit.source_doctype:
@@ -584,13 +598,14 @@ def check_in(clinic, request_id, department, doctor, patient=None, patient_detai
                 try: cal.update_appointment(source.doctype, source.name, 'check_in', 'Approved', reason=reason)
                 finally: frappe.flags.opd_checkin = previous
                 return _visit_data(existing_visit)
-        frappe.throw(f'This patient already has active OPD token {str(existing_visit.token_number).zfill(3)} for {existing_visit.department} with {existing_visit.consultation_doctor}. Open that visit to continue or change its department or doctor.')
+        frappe.throw(f'This patient already has active OPD token {str(existing_visit.token_number).zfill(3)} for {existing_visit.department} with {existing_visit.consultation_doctor}. Open that visit to continue or change its room route or doctor.')
     clinic_doc = _doc('Clinic', clinic); today = getdate()
     if str(clinic_doc.token_date or '') != str(today): clinic_doc.token_date, clinic_doc.last_token = today, 0
     clinic_doc.last_token = cint(clinic_doc.last_token) + 1; clinic_doc.save(ignore_permissions=True)
     source_key = f'{source.doctype}:{source.name}' if source else f'walkin:{request_id}:{frappe.session.user}'
     visit = _doc({'doctype': 'Visit', 'clinic': clinic, 'patient': patient,
-        'patient_name': person.patient_name, 'department': department,
+        'patient_name': person.patient_name, 'department': department, 'route_id':route.name,
+        'route_name':route.get('route_name') or route.get('department') or route.name,
         'original_doctor': booked_doctor if source and _exists('Healthcare Practitioner', booked_doctor) else doctor,
         'consultation_doctor': doctor, 'token_prefix':clinic_doc.get('code'), 'visit_date': today, 'token_number': clinic_doc.last_token,
         'token_key': f'{clinic}:{today}:{clinic_doc.last_token}', 'source_key': hashlib.sha256(source_key.encode()).hexdigest(),
@@ -642,7 +657,7 @@ def _claim_next(clinic,room,room_session,required=False):
     candidates=[]
     for item in store.records('Visit', {'clinic':clinic,'status':'Active'}):
         stage=item.stages[item.stage_index]
-        if stage.room==room.name and stage.state=='Waiting' and (room.purpose!='Doctor Consultation' or item.consultation_doctor==room_session.practitioner):
+        if stage.room==room.name and stage.state=='Waiting':
             candidates.append(item)
     candidates.sort(key=lambda v:(-cint(v.priority),str(v.stages[v.stage_index].queued_at),str(v.creation),v.name))
     rows=[v.name for v in candidates[:1]]
@@ -651,6 +666,11 @@ def _claim_next(clinic,room,room_session,required=False):
         return None
     visit = _get('Visit',rows[0],clinic); stage = visit.stages[visit.stage_index]
     transition={'affected_visit': visit.name, 'stage': stage.stage, 'from_state': stage.state, 'to_state': 'Called'}
+    if room.purpose == 'Doctor Consultation':
+        transition['previous_consultation_doctor'] = visit.consultation_doctor
+        transition['consultation_doctor'] = room_session.practitioner
+        visit.consultation_doctor = room_session.practitioner
+        stage.practitioner = room_session.practitioner
     stage.state, stage.called_at, stage.session = 'Called', now_datetime(), room_session.name
     room_session.current_visit = visit.name
     room_session.call_sequence = cint(_value('Clinic',clinic,'event_sequence')) + 1
@@ -701,9 +721,6 @@ def room_action(clinic, request_id, session, expected_version, action, reason=No
             stage.state = 'On Hold'; room_session.current_visit = None
         audit['to_state'] = stage.state
         _save(visit)
-        if visit.status == 'Completed' and visit.source_doctype:
-            from mobile_app.api import appointment_calendar as cal
-            cal._sync_clinic_status(_canonical(visit.source_doctype,visit.source_name),'Checked In')
         if action == 'complete_next':
             audit['next_call'] = _claim_next(clinic,room,room_session)
     else: frappe.throw('Unknown room action.')
@@ -728,18 +745,20 @@ def _reroute_visit(visit, department, doctor):
         remaining.append(row)
     if not remaining: frappe.throw('The new route has no unfinished stages. Complete the current visit instead.')
     visit.set('stages',completed+remaining);visit.stage_index=len(completed)
-    visit.department,visit.consultation_doctor,visit.route_version = department,doctor,route.revision
+    visit.route_id = route.name
+    visit.route_name = route.get('route_name') or route.get('department') or route.name
+    visit.consultation_doctor,visit.route_version = doctor,route.revision
     _save(visit)
 
 
 @frappe.whitelist(methods=['POST'])
 @_mutation
-def visit_action(clinic, request_id, visit, expected_version, action, reason, department=None, doctor=None, priority=None):
+def visit_action(clinic, request_id, visit, expected_version, action, reason, department=None, doctor=None, priority=None, route_id=None):
     _require_reception(); _reason(reason)
     doc = _get('Visit',visit,clinic); _version(doc,expected_version)
     if doc.status != 'Active': frappe.throw('This visit has already ended.')
     stage = doc.stages[doc.stage_index]
-    if action == 'reroute': _reroute_visit(doc,department or doc.department,doctor or doc.consultation_doctor)
+    if action == 'reroute': _reroute_visit(doc,route_id or department or doc.get('route_id') or doc.department,doctor or doc.consultation_doctor)
     elif action == 'priority': doc.priority = int(bool(cint(priority))); _save(doc)
     elif action == 'requeue':
         if stage.state != 'On Hold': frappe.throw('Only a patient on hold can rejoin the queue.')
@@ -756,16 +775,14 @@ def preview_reroute(clinic):
     _access(clinic); _require_manager(); result=[]
     for name in _all('Visit',filters={'clinic':clinic,'status':'Active'},pluck='name'):
         visit=_doc('Visit',name)
-        route_name=_value('Route',{'clinic':clinic,'department':visit.department},'name')
+        route_name=visit.get('route_id') or _value('Route',{'clinic':clinic,'department':visit.department},'name')
         if not route_name: continue
         route=_doc('Route',route_name)
         if [(s.get('purpose_id') or s.stage,s.room) for s in visit.stages if s.state!='Completed'] == [(x['purpose_id'],x['room']) for x in _route_steps(route) if x['purpose_id'] not in {s.get('purpose_id') or s.stage for s in visit.stages if s.state=='Completed'}]: continue
         blocked=any(s.state in ('Called','In Progress') for s in visit.stages)
-        room=_doc('Room',route.consultation_room)
-        mismatch=not any(a.practitioner==visit.consultation_doctor for a in room.assignments)
         result.append({'visit':visit.name,'token':_visit_data(visit)['token'],'patient_name':visit.patient_name,
-            'revision':visit.revision,'route_revision':route.revision,'blocked':blocked or mismatch,
-            'reason':'Release the patient first' if blocked else 'Reassign consultation doctor first' if mismatch else '',
+            'revision':visit.revision,'route_revision':route.revision,'blocked':blocked,
+            'reason':'Release the patient first' if blocked else '',
             'rooms':[x['room'] for x in _route_steps(route)]})
     return {'patients':result,'config_version':_value('Clinic',clinic,'config_version')}
 
@@ -780,7 +797,7 @@ def apply_routes(clinic,request_id,expected_version,patients,reason):
     for row in changes:
         visit=_get('Visit',row['visit'],clinic);_version(visit,row.get('revision'))
         if visit.status!='Active':frappe.throw('A visit changed. Preview again.')
-        _reroute_visit(visit,visit.department,visit.consultation_doctor)
+        _reroute_visit(visit,visit.get('route_id') or visit.department,visit.consultation_doctor)
     return {'updated':len(changes)}
 
 
@@ -813,6 +830,7 @@ def _daily_visits(clinic, date=None, offset=0, page_length=100, search="", statu
         where += """ AND LOCATE(%s, LOWER(CONCAT_WS(' ',
             JSON_UNQUOTE(JSON_EXTRACT(w.opd_payload,'$.patient_name')),
             JSON_UNQUOTE(JSON_EXTRACT(w.opd_payload,'$.department')),
+            JSON_UNQUOTE(JSON_EXTRACT(w.opd_payload,'$.route_name')),
             COALESCE(h.practitioner_name, JSON_UNQUOTE(JSON_EXTRACT(w.opd_payload,'$.consultation_doctor'))),
             CONCAT(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(w.opd_payload,'$.token_prefix')), ''), '-',
                 LPAD(JSON_UNQUOTE(JSON_EXTRACT(w.opd_payload,'$.token_number')),
@@ -1111,3 +1129,36 @@ def delete_vital_option(clinic,request_id,session,option):
     if not any(x['id']==option for x in options):frappe.throw('This option has already been removed. Reopen Vitals.')
     doc=_doc('Clinic',clinic);doc.set('vital_options',[x for x in options if x['id']!=option]);doc.config_version=cint(doc.config_version)+1;_save(doc)
     return {'options':doc.vital_options}
+
+
+def _require_appointment_operator():
+    from mobile_app.api.appointment_calendar import RECEPTION_ROLES
+    if not _roles().intersection(RECEPTION_ROLES):
+        frappe.throw('Only Receptionists or authorized OPD staff can perform this appointment action.', frappe.PermissionError)
+
+
+@frappe.whitelist(methods=['POST'])
+@_mutation
+def complete_appointment(clinic, request_id, visit, expected_version):
+    """Explicit reception action, separate from completion of clinical room stages."""
+    _require_appointment_operator()
+    current = _get('Visit', visit, clinic)
+    _version(current, expected_version)
+    if not current.source_doctype:
+        frappe.throw('This visit has no linked appointment.')
+    if current.status != 'Completed' or not current.stages or any(s.state != 'Completed' for s in current.stages):
+        frappe.throw('Finish all required OPD steps before completing the appointment.')
+    from mobile_app.api import appointment_calendar as cal
+    source = cal._source(current.source_doctype, current.source_name, lock=True)
+    state = cal._workflow(source.doctype, source.name)
+    if cal._status(source, state) != 'Checked In':
+        frappe.throw('The appointment must be Checked In. Refresh and try again.', frappe.TimestampMismatchError)
+    workflow = frappe.get_doc(cal.WORKFLOW, state.name)
+    workflow.workflow_status = 'Completed'
+    workflow.checked_out_at = now_datetime()
+    workflow.completed_by = frappe.session.user
+    workflow.save(ignore_permissions=True)
+    cal._sync_encounter_status(source, 'Completed')  # Read-only appointment display field only.
+    workflow.add_comment('Comment', text='Checked In → Completed')
+    _save(current)
+    return _visit_data(current)

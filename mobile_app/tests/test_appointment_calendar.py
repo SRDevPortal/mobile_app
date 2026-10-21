@@ -16,7 +16,7 @@ class TestAppointmentCalendar(unittest.TestCase):
         self.other = f"other-{self.suffix}@example.invalid"
         self.doctor = f"doctor-{self.suffix}@example.invalid"
         self.roles = {self.agent: ["Agent"], self.other: ["Agent"], self.doctor: ["Mobile App Doctor"],
-                      "Administrator": ["System Manager"], "Guest": []}
+                      "Administrator": ["System Manager", "Appointment Receptionist"], "Guest": []}
         for user in [self.agent, self.other, self.doctor]:
             frappe.get_doc({"doctype": "User", "name": user, "email": user,
                             "first_name": "Calendar Test", "enabled": 1, "user_type": "System User"}).db_insert()
@@ -43,12 +43,39 @@ class TestAppointmentCalendar(unittest.TestCase):
             result = self.update(action, before)
             self.assertEqual(result["status"], after)
         self.assertTrue(result["checked_in_at"])
-        self.assertEqual(result["actions"], [])
+        self.assertEqual(result["actions"], ["cancel", "complete"])
         self.assertNotIn("consultation_started_at", result)
         self.assertNotIn("checked_out_at", result)
         self.assertEqual(len(result["history"]), 2)
         self.assertEqual(frappe.db.get_value("Mobile App Appointment", self.name, "status"), "Booked")
         self.assertEqual(frappe.db.count(api.WORKFLOW, {"reference_name": self.name}), 1)
+
+    def test_in_clinic_check_in_has_no_online_status_actions(self):
+        self.update("approve", "Pending")
+        self.update("check_in", "Approved")
+        frappe.db.set_value("Mobile App Appointment", self.name, "is_online", 0)
+        self.assertEqual(api.get_appointment("Mobile App Appointment", self.name)["actions"], [])
+        for action in ("complete", "cancel"):
+            with self.assertRaises(frappe.PermissionError):
+                self.update(action, "Checked In", reason="Not an online appointment")
+
+    def test_online_completion_after_check_in(self):
+        self.update("approve", "Pending")
+        self.update("check_in", "Approved")
+        result = self.update("complete", "Checked In")
+        self.assertEqual(result["status"], "Completed")
+        self.assertTrue(result["completed_at"])
+        self.assertEqual(result["completed_by"], "Administrator")
+        self.assertEqual(result["actions"], [])
+
+    def test_online_cancellation_after_check_in_requires_reason(self):
+        self.update("approve", "Pending")
+        self.update("check_in", "Approved")
+        with self.assertRaises(frappe.ValidationError):
+            self.update("cancel", "Checked In")
+        result = self.update("cancel", "Checked In", reason="Patient unavailable")
+        self.assertEqual(result["status"], "Cancelled")
+        self.assertEqual(result["actions"], [])
 
     def test_rejection_requires_reason_and_is_terminal(self):
         with self.assertRaises(frappe.ValidationError):
@@ -111,12 +138,12 @@ class TestAppointmentCalendar(unittest.TestCase):
         with self.assertRaises(frappe.ValidationError):
             api.get_calendar("2099-01-01", "2099-12-31")
 
-    def test_cancelled_source_overrides_existing_approval(self):
+    def test_cancelled_source_does_not_override_existing_approval(self):
         self.update("approve", "Pending")
         frappe.db.set_value("Mobile App Appointment", self.name, "status", "Cancelled")
         result = api.get_appointment("Mobile App Appointment", self.name)
-        self.assertEqual(result["status"], "Cancelled")
-        self.assertEqual(result["actions"], [])
+        self.assertEqual(result["status"], "Approved")
+        self.assertIn("check_in", result["actions"])
 
     def test_encounter_bookings_are_canonical_and_mobile_link_deduplicates(self):
         encounter = "calendar-encounter-" + self.suffix
@@ -134,7 +161,7 @@ class TestAppointmentCalendar(unittest.TestCase):
         self.assertEqual(result["encounter"], encounter)
         self.assertTrue(result["online"])
 
-    def test_linked_clinic_progress_survives_encounter_resync(self):
+    def test_appointment_actions_do_not_write_linked_clinical_status(self):
         from clinic_appointments.api.encounter_sync import _derive_appointment_status
 
         encounter = "calendar-linked-" + self.suffix
@@ -153,11 +180,10 @@ class TestAppointmentCalendar(unittest.TestCase):
         self.assertEqual(api.get_appointment("Patient Encounter", encounter)["patient_name"], "Calendar Patient Name")
         self.assertEqual(next(r for r in rows if r["name"] == encounter)["phone"], "7700900123")
         self.assertEqual(api.get_appointment("Patient Encounter", encounter)["phone"], "7700900123")
-        for action, before, expected in [("approve", "Pending", "Confirmed"),
-            ("check_in", "Approved", "Completed")]:
+        for action, before, expected in [("approve", "Pending", "Draft"),
+            ("check_in", "Approved", "Draft")]:
             api.update_appointment("Patient Encounter", encounter, action, before)
             self.assertEqual(frappe.db.get_value("Clinic Appointment", clinic, "appointment_status"), expected)
-            self.assertEqual(_derive_appointment_status(frappe.get_doc("Patient Encounter", encounter)), expected)
         self.assertEqual(frappe.db.get_value("Patient Encounter", encounter, "sr_encounter_status"), "Draft")
 
     def test_doctor_roster_includes_zero_bookings_and_respects_doctor_scope(self):
@@ -182,9 +208,10 @@ class TestAppointmentCalendar(unittest.TestCase):
         frappe.set_user(self.agent)
         self.assertTrue(api.get_calendar("2099-01-10", "2099-01-11")["can_assign"])
         self.update("assign", "Pending", agent=self.agent)
-        for action, before in [("approve", "Pending"), ("check_in", "Approved")]:
-            self.update(action, before)
-        self.assertEqual(api.get_appointment("Mobile App Appointment", self.name)["status"], "Checked In")
+        self.update("approve", "Pending")
+        with self.assertRaises(frappe.PermissionError):
+            self.update("check_in", "Approved")
+        self.assertEqual(api.get_appointment("Mobile App Appointment", self.name)["status"], "Approved")
 
     def test_reception_visibility_and_actions_are_enforced_in_api(self):
         # A legacy Agent role must not accidentally broaden receptionist access.
@@ -216,9 +243,7 @@ class TestAppointmentCalendar(unittest.TestCase):
             self.update("start", "Checked In")
         frappe.db.set_value("Mobile App Appointment", self.name, "status", "Cancelled")
         frappe.set_user(self.other)
-        with self.assertRaises(frappe.PermissionError):
-            api.get_appointment("Mobile App Appointment", self.name)
-        self.assertEqual(api.get_calendar("2099-01-10", "2099-01-11")["appointments"], [])
+        self.assertEqual(api.get_appointment("Mobile App Appointment", self.name)["status"], "Checked In")
 
     def test_search_fields_are_returned_only_for_authorized_bookings(self):
         frappe.db.set_value("Mobile App Appointment", self.name,
@@ -251,13 +276,21 @@ class TestAppointmentCalendar(unittest.TestCase):
 
     def test_legacy_statuses_normalize_without_reopening_appointments(self):
         self.update("approve", "Pending")
-        for legacy, final in [("In Consultation", "Checked In"), ("Completed", "Checked In"), ("Rejected", "Cancelled")]:
+        for legacy, final in [("In Consultation", "Checked In"), ("Completed", "Completed"), ("Rejected", "Cancelled")]:
             frappe.db.set_value(api.WORKFLOW, api._key("Mobile App Appointment", self.name), "workflow_status", legacy)
             result = api.get_appointment("Mobile App Appointment", self.name)
             self.assertEqual(result["status"], final)
-            self.assertEqual(result["actions"], [])
+            self.assertEqual(result["actions"], ["cancel", "complete"] if final == "Checked In" else [])
             with self.assertRaises(frappe.ValidationError):
                 self.update("assign", final, agent=self.agent)
+
+    def test_room_progress_does_not_invalidate_calendar_payload(self):
+        self.update('approve','Pending')
+        before=api.get_calendar_changes('2099-01-10','2099-01-11')
+        frappe.db.set_value(api.WORKFLOW,api._key('Mobile App Appointment',self.name),'opd_queue_status','In Progress')
+        self.assertEqual(before,api.get_calendar_changes('2099-01-10','2099-01-11'))
+        self.update('check_in','Approved')
+        self.assertNotEqual(before,api.get_calendar_changes('2099-01-10','2099-01-11'))
 
     def test_patient_encounter_status_is_synced_and_cannot_be_forged(self):
         name = "calendar-status-" + self.suffix
@@ -274,7 +307,7 @@ class TestAppointmentCalendar(unittest.TestCase):
         self.assertEqual(doc.custom_appointment_status, "Checked In")
         doc.docstatus = 2
         api.sync_encounter_status(doc, method="on_cancel")
-        self.assertEqual(frappe.db.get_value("Patient Encounter", name, api.APPOINTMENT_STATUS_FIELD), "Cancelled")
+        self.assertEqual(frappe.db.get_value("Patient Encounter", name, api.APPOINTMENT_STATUS_FIELD), "Checked In")
         doc.sr_encounter_type = "Followup"; api.sync_encounter_status(doc)
         self.assertEqual(doc.custom_appointment_status, "")
 
@@ -355,3 +388,11 @@ class TestAppointmentCalendar(unittest.TestCase):
         # No settings or writes can accidentally run through the read helper.
         with self.assertRaises(ValueError):
             api._calendar_sql("DELETE FROM `tabPatient Encounter`")
+
+
+class TestIndependentStatus(unittest.TestCase):
+    def test_future_completed_or_cancelled_encounter_does_not_set_appointment_status(self):
+        for source in ('Completed', 'Done', 'Cancelled', 'Draft'):
+            for saved in (None, 'Approved', 'Checked In', 'Completed'):
+                doc=frappe._dict(status=source,sr_encounter_status=source,docstatus=2,pe_appointment_date='2099-01-01')
+                self.assertEqual(api._status(doc,frappe._dict(workflow_status=saved)),saved or 'Pending')

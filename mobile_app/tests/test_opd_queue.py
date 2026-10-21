@@ -10,7 +10,7 @@ class TestOPDQueue(unittest.TestCase):
         self.original_user = frappe.session.user
         frappe.set_user("Administrator")
         self.suffix = frappe.generate_hash(length=10)
-        self.roles = {"Administrator": ["System Manager"], "Guest": []}
+        self.roles = {"Administrator": ["System Manager", "Appointment Receptionist"], "Guest": []}
         self.role_patch = patch.object(frappe, "get_roles", side_effect=lambda user=None: self.roles.get(user or frappe.session.user, []))
         self.role_patch.start()
         self.departments = []
@@ -139,16 +139,39 @@ class TestOPDQueue(unittest.TestCase):
         cal.update_appointment('Patient Encounter',encounter,'approve','Pending')
         args=dict(clinic=self.clinic,request_id=self.req(),department=self.departments[0],doctor=self.doctors[0],source_doctype='Mobile App Appointment',source_name=mobile)
         visit=api.check_in(**args)
+        self.assertFalse(visit['can_complete_appointment'])
+        with self.assertRaises(frappe.ValidationError):
+            api.complete_appointment(self.clinic,self.req(),visit['name'],visit['revision'])
         self.assertEqual(frappe.as_json(api.check_in(**args)),frappe.as_json(visit))
         repeat=api.check_in(**dict(args,request_id=self.req(),source_doctype='Patient Encounter',source_name=encounter))
         self.assertEqual(visit['name'],repeat['name'])
-        self.assertEqual(frappe.db.get_value('Clinic Appointment',booking,'appointment_status'),'Confirmed')
+        self.assertEqual(frappe.db.get_value('Clinic Appointment',booking,'appointment_status'),'Draft')
         doc=frappe.get_doc('Clinic Appointment',booking); doc.appointment_status='Completed'
         api.preserve_clinic_progress(doc); self.assertEqual(doc.appointment_status,'Confirmed')
         for number,doctor in [(1,None),(4,None),(6,0)]:
             session=self.open_room(number,doctor)
             self.act(session,'call_next');self.act(session,'start');self.act(session,'complete');self.act(session,'end')
-        self.assertEqual(frappe.db.get_value('Clinic Appointment',booking,'appointment_status'),'Completed')
+        self.assertEqual(frappe.db.get_value('Clinic Appointment',booking,'appointment_status'),'Draft')
+        current=api.get_visit(self.clinic,visit['name'])
+        self.assertEqual(current['appointment_status'],'Checked In')
+        self.assertTrue(current['can_complete_appointment'])
+        for role in ('Appointment Agent','Appointment Manager','System Manager','Mobile App Doctor'):
+            user=self.user(role);frappe.set_user(user)
+            with self.assertRaises(frappe.PermissionError):
+                api.complete_appointment(self.clinic,self.req(),visit['name'],current['revision'])
+        staff=self.user('OPD Staff');frappe.set_user(staff)
+        args=dict(clinic=self.clinic,request_id=self.req(),visit=visit['name'],expected_version=current['revision'])
+        result=api.complete_appointment(**args)
+        self.assertEqual(result['appointment_status'],'Completed')
+        self.assertFalse(result['can_complete_appointment'])
+        self.assertEqual(api.complete_appointment(**args),result)
+        with self.assertRaises(frappe.TimestampMismatchError):
+            api.complete_appointment(**dict(args,request_id=self.req()))
+        workflow=cal._workflow('Patient Encounter',encounter)
+        self.assertEqual(workflow.completed_by,staff)
+        self.assertTrue(workflow.checked_out_at)
+        self.assertEqual(frappe.db.get_value('Patient Encounter',encounter,'sr_encounter_status'),'Draft')
+        self.assertEqual(frappe.db.get_value('Clinic Appointment',booking,'appointment_status'),'Draft')
         self.assertEqual(len(store.records('Visit',{'clinic':self.clinic})),1)
 
     def user(self, role):
@@ -186,7 +209,7 @@ class TestOPDQueue(unittest.TestCase):
         session=self.open_room(1)
         self.assertEqual(self.act(session,'call_next')['visit'],second['name'])
 
-    def test_consultation_room_filters_by_doctor(self):
+    def test_consultation_room_calls_route_queue_in_order_regardless_of_booked_doctor(self):
         other=self.user('OPD Staff');setup=api.get_setup(self.clinic)
         room5=next(r for r in setup['rooms'] if r['room_number']=='5')
         room5['assignments']=[{'user':other,'practitioner':self.doctors[1]},{'user':'Administrator','practitioner':self.doctors[0]}]
@@ -201,8 +224,12 @@ class TestOPDQueue(unittest.TestCase):
                 self.act(session,'start');self.act(session,'complete')
             self.act(session,'end')
         session=self.open_room(5,0)
+        self.assertEqual(self.act(session,'call_next')['visit'],skin['name'])
+        self.assertEqual(self.stage(skin)['consultation_doctor'], self.doctors[0])
+        self.assertEqual(self.stage(skin)['original_doctor'], self.doctors[1])
+        self.assertEqual(self.stage(kidney)['stages'][2]['state'],'Waiting')
+        self.act(session,'start');self.act(session,'complete')
         self.assertEqual(self.act(session,'call_next')['visit'],kidney['name'])
-        self.assertEqual(self.stage(skin)['stages'][2]['state'],'Waiting')
 
     def test_reroute_preserves_completed_stages(self):
         visit=self.visit();session=self.open_room(1)
@@ -563,3 +590,66 @@ class TestOPDQueue(unittest.TestCase):
             api.delete_vital_option(self.clinic,self.req(),session,option['id'])
         self.assertEqual(api.room_vitals(self.clinic,session)['options'],[])
         self.assertEqual(frappe.db.get_value('Patient Encounter',result['encounter'],'sr_notes'),notes)
+
+    def test_named_route_checkin_without_department_and_reroute(self):
+        setup = api.get_setup(self.clinic)
+        route = dict(next(r for r in setup['routes'] if r['department'] == self.departments[0]))
+        route.pop('name')
+        route.pop('department')
+        route['route_name'] = 'General OPD route'
+        api.save_setup(self.clinic, self.req(), setup['config_version'], setup['rooms'], setup['routes'] + [route])
+        setup = api.get_setup(self.clinic)
+        route = next(r for r in setup['routes'] if r['route_name'] == 'General OPD route')
+        patient = 'Named route patient ' + self.req()
+        frappe.get_doc({'doctype':'Patient','name':patient,'first_name':patient,'patient_name':patient}).db_insert()
+        with patch('mobile_app.token_notifications.queue_token'):
+            visit = api.check_in(self.clinic, self.req(), route_id=route['name'], doctor=self.doctors[0], patient=patient)
+        self.assertEqual(visit['route_id'], route['name'])
+        self.assertEqual(visit['route_name'], 'General OPD route')
+        self.assertFalse(visit['department'])
+        self.assertEqual(len(visit['stages']), 3)
+        # Renaming must not break active visit identity or route application.
+        route['route_name'] = 'Standard OPD route'
+        api.save_setup(self.clinic, self.req(), setup['config_version'], setup['rooms'], setup['routes'])
+        setup = api.get_setup(self.clinic)
+        with self.assertRaises(frappe.ValidationError):
+            api.save_setup(self.clinic, self.req(), setup['config_version'], setup['rooms'],
+                [r for r in setup['routes'] if r['name'] != route['name']])
+        target = next(r for r in setup['routes'] if r['department'] == self.departments[1])
+        updated = api.visit_action(self.clinic, self.req(), visit['name'], visit['revision'], 'reroute',
+            'Test room route change', route_id=target['name'], doctor=self.doctors[1])
+        self.assertEqual(updated['route_id'], target['name'])
+        self.assertFalse(updated['department'])
+        self.assertEqual(updated['stages'][-1]['room'], self.rooms['5'])
+
+    def test_named_routes_require_unique_names_and_explicit_selection(self):
+        setup = api.get_setup(self.clinic)
+        setup['routes'][1]['route_name'] = setup['routes'][0]['route_name'].upper()
+        with self.assertRaises(frappe.ValidationError):
+            api.save_setup(self.clinic, self.req(), setup['config_version'], setup['rooms'], setup['routes'])
+        for selection in (None, 'missing-route'):
+            with self.assertRaises(frappe.ValidationError):
+                api._route(self.clinic, selection, self.doctors[0])
+        with self.assertRaises(frappe.ValidationError):
+            api._route('another-branch', self.setup['routes'][0]['name'], self.doctors[0])
+
+    def test_call_next_follows_room_route_and_records_current_doctor(self):
+        visit = frappe._dict(name='waiting-visit', stage_index=0, consultation_doctor='Doctor B',
+            original_doctor='Doctor B', priority=0, creation='2026-10-19',
+            stages=[frappe._dict(room='room-a', state='Waiting', stage='Doctor Consultation', queued_at='2026-10-19')])
+        other_room = frappe._dict(name='other-visit', stage_index=0, consultation_doctor='Doctor A',
+            stages=[frappe._dict(room='room-b', state='Waiting')])
+        room = frappe._dict(name='room-a', purpose='Doctor Consultation')
+        session = frappe._dict(name='session-a', practitioner='Doctor A')
+        with patch.object(store, 'records', return_value=[other_room, visit]), \
+             patch.object(api, '_get', return_value=visit), \
+             patch.object(api, '_value', return_value=1), patch.object(api, '_save') as save:
+            result = api._claim_next(self.clinic, room, session, required=True)
+        self.assertEqual(visit.stages[0].state, 'Called')
+        self.assertEqual(session.current_visit, visit.name)
+        self.assertEqual(visit.consultation_doctor, 'Doctor A')
+        self.assertEqual(visit.original_doctor, 'Doctor B')
+        self.assertEqual(result['previous_consultation_doctor'], 'Doctor B')
+        self.assertEqual(result['consultation_doctor'], 'Doctor A')
+        self.assertEqual(other_room.stages[0].state, 'Waiting')
+        save.assert_called_once_with(visit)

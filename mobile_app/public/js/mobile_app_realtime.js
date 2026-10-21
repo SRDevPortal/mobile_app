@@ -12,8 +12,8 @@ frappe.provide("mobile_app.realtime");
     }
 
     function scheduleFlush() {
-        clearTimeout(flushTimer);
-        flushTimer = setTimeout(flush, 200);
+        if (flushTimer) return;
+        flushTimer = setTimeout(() => { flushTimer = null; flush(); }, 1500);
     }
 
     function flush() {
@@ -38,18 +38,18 @@ frappe.provide("mobile_app.realtime");
 
     function changed(message) {
         for (const watcher of watchers.values()) {
-            if (!watcher.types.has(message?.doctype)) continue;
+            if (!watcher.types.has(message?.doctype) || (watcher.accept && !watcher.accept(message))) continue;
             watcher.version++;
             watcher.dirty = true;
         }
         scheduleFlush();
     }
 
-    mobile_app.realtime.watch = (key, types, active, refresh) => {
+    mobile_app.realtime.watch = (key, types, active, refresh, accept) => {
         if (watchers.has(key)) {
-            Object.assign(watchers.get(key), {types: new Set(types), active, refresh});
+            Object.assign(watchers.get(key), {types: new Set(types), active, refresh, accept});
         } else {
-            watchers.set(key, {types: new Set(types), active, refresh, dirty: false, running: false, version: 0});
+            watchers.set(key, {types: new Set(types), active, refresh, accept, dirty: false, running: false, version: 0});
         }
     };
     mobile_app.realtime.flush = scheduleFlush;
@@ -99,7 +99,10 @@ frappe.provide("mobile_app.realtime");
         });
         frappe.router.on("change", scheduleFlush);
     });
-    document.addEventListener("visibilitychange", scheduleFlush);
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) for (const watcher of watchers.values()) { watcher.version++; watcher.dirty=true; }
+        scheduleFlush();
+    });
     $(document).on("change", ".list-row-checkbox, .list-check-all", scheduleFlush);
     $(document).on("page-change", scheduleFlush);
 })();

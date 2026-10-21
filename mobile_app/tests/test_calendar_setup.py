@@ -94,37 +94,17 @@ class TestCalendarSetup(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "database unavailable"):
             api._sync_clinic_status(self.doc, "Cancelled", skip_invalid_links=True)
 
-    def test_setup_continues_after_mismatched_and_missing_links(self):
-        missing = frappe._dict(
-            doctype="Patient Encounter", name="missing-encounter", encounter_reference="missing-clinic"
-        )
-        valid = frappe._dict(
-            doctype="Patient Encounter", name="valid-encounter", encounter_reference="valid-clinic"
-        )
-        valid_clinic = Mock(encounter_reference=valid.name, appointment_status="Draft")
-        docs = {
-            self.doc.name: self.doc, missing.name: missing, valid.name: valid,
-            "clinic-appointment": self.clinic, "valid-clinic": valid_clinic,
-        }
-        self.get_doc.side_effect = lambda doctype, name: docs[name]
-        self.db.exists.side_effect = lambda doctype, name: name != "missing-clinic"
+    def test_setup_does_not_rewrite_existing_appointment_history(self):
         with (
             patch("frappe.custom.doctype.custom_field.custom_field.create_custom_fields"),
-            patch.object(frappe, "get_all", return_value=[self.doc.name, missing.name, valid.name]),
-            patch.object(api, "_workflow", return_value=frappe._dict()),
-            patch.object(api, "_status", return_value="Cancelled"),
-            patch.object(api, "_sync_encounter_status") as sync_encounter,
+            patch.object(frappe, "get_all") as get_all,
+            patch.object(api, "_sync_encounter_status") as sync,
         ):
             calendar_setup.setup_encounter_status()
-        self.assertEqual(sync_encounter.call_args_list, [
-            call(self.doc, "Cancelled"), call(missing, "Cancelled"), call(valid, "Cancelled"),
-        ])
-        self.db.set_value.assert_called_once_with(
-            "Clinic Appointment", "valid-clinic", "appointment_status", "Cancelled"
-        )
-        self.clinic.add_comment.assert_not_called()
-        valid_clinic.add_comment.assert_called_once()
-        self.assertEqual(self.logger.return_value.warning.call_count, 2)
+        get_all.assert_not_called()
+        sync.assert_not_called()
+        self.db.set_value.assert_not_called()
+        self.db.sql.assert_not_called()
 
 
 if __name__ == "__main__":

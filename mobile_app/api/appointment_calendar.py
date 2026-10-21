@@ -13,12 +13,15 @@ AGENT_ROLES = {"Agent", "Appointment Agent"}
 DOCTOR_ROLES = {"Physician", "Healthcare Practitioner", "Mobile App Doctor"}
 MANAGER_ROLES = {"System Manager", "Appointment Manager"}
 RECEPTION_ROLE = "Appointment Receptionist"
+RECEPTION_ROLES = {RECEPTION_ROLE, "OPD Staff"}
 TRANSITIONS = {
     "approve": (("Pending",), "Approved"),
-    "cancel": (("Pending", "Approved"), "Cancelled"),
+    "cancel": (("Pending", "Approved", "Checked In"), "Cancelled"),
+    "complete": (("Checked In",), "Completed"),
     "check_in": (("Approved",), "Checked In"),
 }
-LEGACY_STATUSES = {"Rejected": "Cancelled", "In Consultation": "Checked In", "Completed": "Checked In"}
+LEGACY_STATUSES = {"Rejected": "Cancelled", "In Consultation": "Checked In", "Completed": "Completed"}
+DOCTOR_CHANGE_ROLES = {"Appointment Agent", "Appointment Manager"}
 APPOINTMENT_STATUS_FIELD = "custom_appointment_status"
 
 
@@ -27,7 +30,7 @@ def _context():
     user = frappe.session.user
     roles = set(frappe.get_roles(user)) if user != "Guest" else set()
     manager = user == "Administrator" or bool(roles.intersection(MANAGER_ROLES))
-    if not manager and not roles.intersection(AGENT_ROLES | DOCTOR_ROLES | {RECEPTION_ROLE}):
+    if not manager and not roles.intersection(AGENT_ROLES | DOCTOR_ROLES | RECEPTION_ROLES):
         frappe.throw(_("You do not have access to the appointment calendar."), frappe.PermissionError)
     return user, roles, manager
 
@@ -95,8 +98,8 @@ def _can_read_original(doc, workflow, context):
     user, roles, manager = context
     if manager:
         return True
-    if RECEPTION_ROLE in roles:
-        return _status(doc, workflow) in ("Approved", "Checked In")
+    if roles.intersection(RECEPTION_ROLES):
+        return _status(doc, workflow) in ("Approved", "Checked In", "Completed")
     agent = _agent(doc, workflow)
     if roles.intersection(AGENT_ROLES) and (not agent or agent == user):
         return True
@@ -115,29 +118,25 @@ def _can_read(doc, workflow, context):
 
 
 def _status(doc, workflow):
-    source_status = (doc.get("status") or "").lower()
-    encounter_status = (doc.get("sr_encounter_status") or "").lower()
-    if doc.docstatus == 2 or source_status in ("cancelled", "canceled") or encounter_status in ("cancelled", "canceled"):
-        return "Cancelled"
-    if source_status in ("completed", "done") or encounter_status == "completed":
-        return "Checked In"
-    if workflow.get("workflow_status"):
-        return LEGACY_STATUSES.get(workflow.workflow_status, workflow.workflow_status)
-    return "Pending"
+    # Clinical source fields never represent an appointment workflow decision.
+    return LEGACY_STATUSES.get(workflow.get("workflow_status"), workflow.get("workflow_status")) or "Pending"
 
 
 def _actions(doc, workflow, context):
     user, roles, manager = context
     status = _status(doc, workflow)
-    if RECEPTION_ROLE in roles and not manager:
+    if roles.intersection(RECEPTION_ROLES) and not manager:
         return ["check_in"] if status == "Approved" else []
     agent = _agent(doc, workflow)
     can_manage = manager or bool(roles.intersection(AGENT_ROLES) and agent == user)
     actions = []
-    if not agent and roles.intersection(AGENT_ROLES) and status not in ("Checked In", "Cancelled"):
+    if not agent and roles.intersection(AGENT_ROLES) and status not in ("Checked In", "Completed", "Cancelled"):
         actions.append("claim")
+    online = doc.get("sr_encounter_place") == "Online" if doc.doctype == "Patient Encounter" else bool(doc.get("is_online"))
     for action, (before, _) in TRANSITIONS.items():
-        if status in before and can_manage:
+        if status == "Checked In" and not online:
+            continue
+        if status in before and (bool(roles.intersection(RECEPTION_ROLES)) if action == "check_in" else can_manage):
             actions.append(action)
     return actions
 
@@ -162,8 +161,11 @@ def _serialize(doc, workflow, context, details=False):
                date=str(date) if date else None, time=get_time(time or "09:00:00").strftime("%H:%M:%S"),
                duration=cint(workflow.get("duration_minutes")) or 30,
                status=_status(doc, workflow), online=online, assigned_agent=_agent(doc, workflow),
+               can_change_doctor=bool(online and context[1].intersection(DOCTOR_CHANGE_ROLES) and
+                   _status(doc, workflow) == "Pending"),
                actions=_actions(doc, workflow, context), encounter=encounter,
-               checked_in_at=workflow.get("checked_in_at"))
+               checked_in_at=workflow.get("checked_in_at"),
+               completed_at=workflow.get("checked_out_at"), completed_by=workflow.get("completed_by"))
     from mobile_app.api.opd_queue import appointment_branch
     from mobile_app import opd_store
     out['clinic']=None if online else appointment_branch(doc.doctype,doc.name)
@@ -228,7 +230,7 @@ def _calendar_revisions(start, end, context):
         stamps.extend(_calendar_sql("""SELECT 'Patient Encounter' AS source, e.name,
             COALESCE(e.pe_appointment_date, e.encounter_date) AS date,
             e.modified, e.docstatus, e.status, e.sr_encounter_status,
-            w.modified AS workflow_modified, w.workflow_status, w.assigned_agent,
+            w.workflow_status, w.assigned_agent, w.duration_minutes, w.checked_in_at, w.checked_out_at,
             p.modified AS patient_modified, h.modified AS doctor_modified
             FROM `tabPatient Encounter` e
             LEFT JOIN `tabMobile Appointment Workflow` w
@@ -241,7 +243,7 @@ def _calendar_revisions(start, end, context):
             """, (start, end, start, end), as_dict=True))
     stamps.extend(_calendar_sql("""SELECT 'Mobile App Appointment' AS source, a.name,
         a.appointment_date AS date, a.modified, a.docstatus, a.status,
-        w.modified AS workflow_modified, w.workflow_status, w.assigned_agent
+        w.workflow_status, w.assigned_agent, w.duration_minutes, w.checked_in_at, w.checked_out_at
         FROM `tabMobile App Appointment` a
         LEFT JOIN `tabMobile Appointment Workflow` w
             ON w.name=LEFT(SHA2(CONCAT('Mobile App Appointment:', a.name), 256), 32)
@@ -325,13 +327,29 @@ def get_calendar(start, end):
         if _can_read(doc, workflow, context):
             result.append(_serialize(doc, workflow, context))
     doctor_filters = {"status": "Active"}
-    if not context[2] and not context[1].intersection(AGENT_ROLES | {RECEPTION_ROLE}):
+    if not context[2] and not context[1].intersection(AGENT_ROLES | RECEPTION_ROLES):
         doctor_filters["user_id"] = context[0]
+    profile_fields = ["name as id", "practitioner_name as name"]
+    meta = frappe.get_meta("Healthcare Practitioner")
+    for field in ("image", "department", "sr_qualification", "custom_accept_online_appointments"):
+        if meta.has_field(field):
+            profile_fields.append(field)
     doctors = frappe.get_all("Healthcare Practitioner", filters=doctor_filters,
-        fields=["name as id", "practitioner_name as name"], order_by="practitioner_name", limit_page_length=0)
+        fields=profile_fields, order_by="practitioner_name", limit_page_length=0)
+    disease_field = meta.get_field("sr_diseases")
+    disease_tags = {}
+    if doctors and disease_field and disease_field.options:
+        for row in frappe.get_all(disease_field.options,
+                filters={"parent": ["in", [d.id for d in doctors]],
+                         "parenttype": "Healthcare Practitioner", "parentfield": "sr_diseases"},
+                fields=["parent", "disease"], order_by="idx", limit_page_length=0):
+            if row.disease:
+                disease_tags.setdefault(row.parent, []).append(row.disease)
+    for doctor in doctors:
+        doctor["diseases"] = disease_tags.get(doctor.id, [])
     return {"appointments": result, "doctors": doctors, "revisions": revisions,
             "can_assign": context[2], "user": context[0],
-            "reception_only": RECEPTION_ROLE in context[1] and not context[2],
+            "reception_only": bool(context[1].intersection(RECEPTION_ROLES)) and not context[2],
             "timezone": frappe.utils.get_system_timezone()}
 
 
@@ -346,16 +364,16 @@ def get_appointment(doctype, name):
 
 @frappe.whitelist(methods=["POST"])
 def update_appointment(doctype, name, action, expected_status, reason=None, agent=None,
-                       clinic=None, department=None, doctor=None, patient=None, request_id=None):
+                       clinic=None, department=None, doctor=None, patient=None, request_id=None, route_id=None):
     if action == "check_in" and not frappe.flags.opd_checkin:
         source = _source(doctype, name)
         online = source.get("sr_encounter_place") == "Online" if doctype == "Patient Encounter" else bool(source.get("is_online"))
         if not online:
-            if not all((clinic, department, doctor, request_id)):
-                frappe.throw("Use OPD check-in to confirm the department, doctor and patient before issuing a token.")
+            if not all((clinic, route_id or department, doctor, request_id)):
+                frappe.throw("Use OPD check-in to confirm the room route, doctor and patient before issuing a token.")
             from mobile_app.api.opd_queue import check_in
             return check_in(clinic, request_id, department, doctor, patient=patient, source_doctype=doctype,
-                            source_name=name, expected_status=expected_status, reason=reason)
+                            source_name=name, expected_status=expected_status, reason=reason, route_id=route_id)
     action = "cancel" if action == "reject" else action  # Compatibility with already-open older clients.
     context = _context()
     doc = _source(doctype, name, lock=True)
@@ -368,7 +386,7 @@ def update_appointment(doctype, name, action, expected_status, reason=None, agen
     if action == "assign":
         if not context[2]:
             frappe.throw(_("Only an Appointment Manager or System Manager can assign agents."), frappe.PermissionError)
-        if before in ("Cancelled", "Checked In"):
+        if before in ("Cancelled", "Checked In", "Completed"):
             frappe.throw(_("This appointment is already closed."))
         if not agent or not frappe.db.get_value("User", agent, "enabled") or not set(frappe.get_roles(agent)).intersection(AGENT_ROLES | MANAGER_ROLES):
             frappe.throw(_("Choose an enabled Agent, Appointment Agent, Appointment Manager or System Manager."))
@@ -394,12 +412,13 @@ def update_appointment(doctype, name, action, expected_status, reason=None, agen
         if action in ("approve", "cancel"):
             state.decision_by, state.decision_at = context[0], now
             state.decision_reason = (reason or "").strip()
-        timestamp = {"check_in": "checked_in_at"}.get(action)
+        timestamp = {"check_in": "checked_in_at", "complete": "checked_out_at"}.get(action)
+        if action == "complete":
+            state.completed_by = context[0]
         if timestamp:
             state.set(timestamp, now)
     state.save(ignore_permissions=True)
     _sync_encounter_status(doc, state.workflow_status)
-    _sync_clinic_status(doc, state.workflow_status)
     message = f"{before} → {state.workflow_status}" if action not in ("assign", "claim") else f"Assigned to {state.assigned_agent}"
     if reason:
         message += f". Reason: {reason.strip()}"
@@ -478,9 +497,6 @@ def sync_encounter_status(doc, method=None):
         return
     status = _status(doc, _workflow(doc.doctype, doc.name)) if doc.get("sr_encounter_type") == "Appointment" else ""
     doc.set(APPOINTMENT_STATUS_FIELD, status)
-    if method == "on_cancel":
-        _sync_encounter_status(doc, status)
-        _sync_clinic_status(doc, status)
 
 
 def _sync_encounter_status(doc, status):
@@ -488,3 +504,77 @@ def _sync_encounter_status(doc, status):
         if frappe.db.get_value(doc.doctype, doc.name, APPOINTMENT_STATUS_FIELD) != status:
             frappe.db.set_value(doc.doctype, doc.name, APPOINTMENT_STATUS_FIELD, status)
         doc.set(APPOINTMENT_STATUS_FIELD, status)
+
+
+def _doctor_change_context():
+    context = _context()
+    if not context[1].intersection(DOCTOR_CHANGE_ROLES):
+        frappe.throw(_('Only Appointment Agents and Appointment Managers can change appointment doctors.'), frappe.PermissionError)
+    return context
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def online_doctor_query(doctype, txt, searchfield, start, page_len, filters=None):
+    _doctor_change_context()
+    if doctype != 'Healthcare Practitioner':
+        frappe.throw(_('Unsupported doctor lookup.'), frappe.PermissionError)
+    conditions = {'status':'Active'}
+    if frappe.get_meta(doctype).has_field('custom_accept_online_appointments'):
+        conditions['custom_accept_online_appointments'] = 1
+    return frappe.get_all(doctype, filters=conditions,
+        or_filters={'name':['like','%'+(txt or '')+'%'],'practitioner_name':['like','%'+(txt or '')+'%']},
+        fields=['name','practitioner_name'], as_list=True, order_by='practitioner_name',
+        limit_start=max(0,cint(start)), limit_page_length=min(50,max(1,cint(page_len))))
+
+
+@frappe.whitelist(methods=['POST'])
+def change_online_doctor(doctype, name, doctor, expected_doctor, expected_status, reason):
+    context = _doctor_change_context()
+    doc = _source(doctype, name, lock=True)
+    current = _workflow(doctype, name)
+    if not _can_read(doc, current, context):
+        frappe.throw(_('You cannot change this appointment.'), frappe.PermissionError)
+    if doctype == 'Mobile App Appointment' and doc.get('patient_encounter'):
+        frappe.throw(_('Change the doctor on the linked encounter appointment.'))
+    online = doc.get('sr_encounter_place') == 'Online' if doctype == 'Patient Encounter' else bool(doc.get('is_online'))
+    if not online:
+        frappe.throw(_('Use OPD visit management for in-clinic appointments.'))
+    status = _status(doc, current)
+    old_doctor, old_label, _user = _doctor(doc)
+    if status != expected_status or old_doctor != expected_doctor:
+        frappe.throw(_('This appointment changed. Refresh before changing its doctor.'), frappe.TimestampMismatchError)
+    if status != 'Pending':
+        frappe.throw(_('The doctor can only be changed before the appointment is approved.'))
+    reason = str(reason or '').strip()
+    if not reason or len(reason) > 1000:
+        frappe.throw(_('Enter a reason of 1 to 1,000 characters.'))
+    practitioner = frappe.get_doc('Healthcare Practitioner', doctor)
+    if practitioner.status != 'Active':
+        frappe.throw(_('Choose an active doctor.'))
+    if practitioner.meta.has_field('custom_accept_online_appointments') and not cint(practitioner.get('custom_accept_online_appointments')):
+        frappe.throw(_('This doctor does not accept online appointments.'))
+    if old_doctor == doctor:
+        frappe.throw(_('Choose a different doctor.'))
+    if doctype == 'Patient Encounter':
+        doc.pe_practitioner = doctor
+    else:
+        doc.practitioner_id = doctor
+        doc.doctor_name = practitioner.practitioner_name or practitioner.name
+        doc.doctor_user = practitioner.get('user_id')
+        # The new doctor must have an available slot at the existing booking time.
+        doc.practitioner_schedule = None
+        from mobile_app.api.practitioners import _ONLINE_DOCTOR_CHANGE
+        doc.flags._online_doctor_change = _ONLINE_DOCTOR_CHANGE
+    # Preserve normal booking validation and linked scheduling integrations.
+    doc.save(ignore_permissions=True)
+    state = frappe.get_doc(WORKFLOW, current.name) if current else frappe.get_doc({
+        'doctype':WORKFLOW,'appointment_key':_key(doctype,name),
+        'reference_doctype':doctype,'reference_name':name,'workflow_status':status,
+        'assigned_agent':_agent(doc,current)})
+    state.save(ignore_permissions=True)
+    message = f'Doctor changed: {old_label} ({old_doctor}) → {practitioner.practitioner_name or doctor} ({doctor}). Reason: {reason}'
+    state.add_comment('Comment',text=frappe.utils.escape_html(message))
+    # A prior identity lookup in this request must not return stale doctor details.
+    frappe.local.appointment_calendar_doctors = {}
+    return _serialize(doc,state,context,details=True)

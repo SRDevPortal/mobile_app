@@ -82,3 +82,26 @@ def verify(start=None, end=None):
             "sections": len(changes["chunks"]), "query_timeout_seconds": api.CALENDAR_QUERY_TIMEOUT,
             "date_index_columns": [row.COLUMN_NAME for row in indexes],
             "stale_calendar_reads": len(recover_stale_reads()["queries"])}
+
+
+def review_appointment_statuses(start, end):
+    """Read-only review list. Never migrate inferred arrival/completion decisions."""
+    from mobile_app.api import appointment_calendar as api
+    api._context()
+    frappe.only_for('System Manager')
+    start, end = api._calendar_dates(start, end)
+    rows = api._calendar_sql("""SELECT e.name, e.pe_appointment_date,
+        e.custom_appointment_status AS displayed_status,
+        w.workflow_status, w.checked_in_at, w.checked_out_at
+        FROM `tabPatient Encounter` e
+        LEFT JOIN `tabMobile Appointment Workflow` w
+            ON w.name=LEFT(SHA2(CONCAT('Patient Encounter:',e.name),256),32)
+        WHERE e.sr_encounter_type='Appointment'
+            AND e.pe_appointment_date >= %s AND e.pe_appointment_date < %s
+        ORDER BY e.pe_appointment_date, e.name LIMIT 2001""", (start,end))
+    if len(rows)>2000:
+        frappe.throw('Select a shorter review period.')
+    return [dict(row, expected_status=api._status(None,row)) for row in rows
+        if row.displayed_status != api._status(None,row)
+        or (row.workflow_status in ('Checked In','Completed') and not row.checked_in_at)
+        or (row.workflow_status == 'Completed' and not row.checked_out_at)]

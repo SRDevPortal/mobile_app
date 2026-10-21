@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 function harness(){
  const calls=[],document={hidden:false},ui={sort(){},find(){return this;},remove(){},prepend(){}};
- const context={mobile_app:{},document,frappe:{provide(){},utils:{escape_html:String},datetime:{get_today:()=> '2026-10-13'},realtime:{socket:{connected:true}},xcall(method,args){return new Promise((resolve,reject)=>calls.push({method,args,resolve,reject}));}}};
+ const context={mobile_app:{},document,setTimeout,clearTimeout,frappe:{provide(){},utils:{escape_html:String},datetime:{get_today:()=> '2026-10-13'},realtime:{socket:{connected:true}},xcall(method,args){return new Promise((resolve,reject)=>calls.push({method,args,resolve,reject}));}}};
  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/js/opd_queue.js'),'utf8'),context);
  const portal=Object.create(context.mobile_app.OPDPortal.prototype);
  Object.assign(portal,{visible:true,clinic:'branch-a',section:'queue',serial:0,$root:ui,connection(){},renderQueue(){this.renders=(this.renders||0)+1;}});

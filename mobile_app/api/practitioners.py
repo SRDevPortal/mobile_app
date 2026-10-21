@@ -6,20 +6,25 @@ from frappe.utils import getdate, now_datetime, get_system_timezone
 from mobile_app.mobileapp.practitioner_slots import available_slots, seconds, clock
 
 
+# An identity-only token cannot be supplied through a JSON/API document payload.
+_ONLINE_DOCTOR_CHANGE = object()
+
+
 def _practitioner(name):
     doc = frappe.get_doc("Healthcare Practitioner", name)
     doc.check_permission("read")
     return doc
 
 
-def _schedules(doc):
+def _schedules(doc, check_permissions=True):
     schedules = []
     for link in doc.get("practitioner_schedules") or []:
         # Broken links are not bookable and must not produce invented slots.
         if not frappe.db.exists("Practitioner Schedule", link.schedule):
             continue
         schedule = frappe.get_doc("Practitioner Schedule", link.schedule)
-        schedule.check_permission("read")
+        if check_permissions:
+            schedule.check_permission("read")
         if not schedule.disabled and schedule.time_slots:
             schedules.append({**schedule.as_dict(), "service_unit": link.service_unit})
     return schedules
@@ -71,7 +76,7 @@ def _bookings(doc, date, exclude_booking_id=None, lock=False):
     return rows
 
 
-def _availability(doc, date, exclude_booking_id=None, lock=False):
+def _availability(doc, date, exclude_booking_id=None, lock=False, check_permissions=True):
     if doc.status != "Active":
         return []
     override_name = frappe.db.get_value("Doctor Availability Exception",
@@ -81,7 +86,7 @@ def _availability(doc, date, exclude_booking_id=None, lock=False):
         # A dated replacement has no recurring Practitioner Schedule link.
         schedules = [] if override.unavailable else [{"name": "", "time_slots": override.time_slots}]
     else:
-        schedules = _schedules(doc)
+        schedules = _schedules(doc, check_permissions=check_permissions)
     return available_slots(getdate(date), schedules,
                            _bookings(doc, date, exclude_booking_id, lock), now_datetime())
 
@@ -106,7 +111,10 @@ def validate_appointment(doc):
         return
     frappe.db.sql("SELECT name FROM `tabHealthcare Practitioner` WHERE name=%s FOR UPDATE",
                   (doc.practitioner_id,))
-    practitioner = _practitioner(doc.practitioner_id)
+    # The calendar endpoint authorizes the source booking and named staff roles.
+    # It needs slot validation, not general access to practitioner/schedule forms.
+    authorized_change = doc.flags.get('_online_doctor_change') is _ONLINE_DOCTOR_CHANGE
+    practitioner = frappe.get_doc('Healthcare Practitioner',doc.practitioner_id) if authorized_change else _practitioner(doc.practitioner_id)
     from mobile_app.mobileapp.appointment_utils import is_google_meet_url, is_online_appointment_type
     consultation = doc.get("consultation_type") or ""
     if (is_google_meet_url(consultation) or is_online_appointment_type(consultation)
@@ -116,7 +124,7 @@ def validate_appointment(doc):
     elif not frappe.utils.cint(practitioner.get("custom_accept_opd_appointments", 1)):
         frappe.throw("This doctor does not accept OPD appointments. Please choose another doctor.")
     requested = clock(seconds(doc.appointment_time))
-    slots = _availability(practitioner, doc.appointment_date, doc.booking_id, lock=True)
+    slots = _availability(practitioner, doc.appointment_date, doc.booking_id, lock=True, check_permissions=not authorized_change)
     slot = next((s for s in slots if s["time"] == requested and
                  (not doc.get("practitioner_schedule") or s["schedule_id"] == doc.practitioner_schedule)), None)
     if not slot:

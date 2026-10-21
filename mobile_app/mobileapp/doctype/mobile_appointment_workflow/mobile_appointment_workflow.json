@@ -25,7 +25,8 @@
   "opd_token_key",
   "opd_payload",
   "opd_visit_date",
-  "opd_queue_status"
+  "opd_queue_status",
+  "completed_by"
  ],
  "fields": [
   {
@@ -56,7 +57,7 @@
   {
    "fieldname": "workflow_status",
    "fieldtype": "Select",
-   "options": "Pending\nApproved\nCancelled\nChecked In",
+   "options": "Pending\nApproved\nCancelled\nChecked In\nCompleted",
    "default": "Pending",
    "label": "Queue Status",
    "reqd": 1,
@@ -183,6 +184,13 @@
    "label": "OPD Queue Status",
    "fieldtype": "Data",
    "hidden": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "completed_by",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Completed By",
    "read_only": 1
   }
  ],

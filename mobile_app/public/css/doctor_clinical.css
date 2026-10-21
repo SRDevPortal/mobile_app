@@ -435,3 +435,193 @@ body.ma-calendar-active .container.page-body {max-width:none;padding:0}
 .ac-settings-content { padding: 24px; display: grid; gap: 20px; max-width: 1100px; }
 .ac-settings-content .ac-btn { margin: 8px 8px 0 0; }
 .ac-settings-content select { margin: 8px 0; min-width: 220px; }
+
+/* Six independent appointment states and stable background-update notice. */
+.ac-counts {flex-wrap:wrap}
+.ac-counts button {min-width:45px}
+.ac-counts .ac-count-completed {background:#526278}
+.ac-badge.completed {background:#eef0f4;color:#526278}
+.ac-status-mark.completed {color:#526278}
+.ac-queue-view {position:relative}
+.ac-apply-updates {position:absolute;bottom:8px;left:8px;right:8px;z-index:2;white-space:normal;background:#fff;box-shadow:0 2px 8px #0002}
+
+/* Online bookings share the date controls, doctor filters and stable queue. */
+.ac-online-menu {display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:0;text-align:center}
+.ac-online-menu small {font-size:9px}
+.ac-online-mode .ac-calendar-area,.ac-online-mode .ac-views,.ac-online-mode .ac-range-controls {display:none!important}
+.ac-online-mode .ac-panel {flex:1;width:auto;max-width:none}
+.ac-online-mode .ac-booking {max-width:900px;margin-left:auto;margin-right:auto}
+.ac-online-doctor {font-size:16px;margin:16px auto 10px;max-width:900px;color:var(--ac-ink)}
+.ac-online-mode .ac-counts {justify-content:flex-start}
+.ac-online-mode .ac-counts button {flex:0 1 110px}
+
+/* Doctor overview and selected doctor's profile for online appointments. */
+.ac-online-profile {display:none}
+.ac-online-mode .ac-doctors {overflow-y:auto}
+.ac-online-mode .ac-online-profile {display:block;padding:18px}
+.ac-online-mode.ac-online-grid-mode .ac-online-profile {display:none}
+.ac-online-grid {display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:18px;align-content:start;padding:24px}
+.ac-online-card,.ac-online-profile-info {display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;overflow-wrap:anywhere}
+.ac-online-card {border:1px solid var(--ac-border);background:#fff;border-radius:14px;padding:24px 18px;color:var(--ac-ink);cursor:pointer}
+.ac-online-card:hover,.ac-online-card:focus-visible {border-color:var(--ac-brand);box-shadow:0 3px 12px #11665e20}
+.ac-online-card strong,.ac-online-profile-info strong {font-size:17px}
+.ac-online-card span,.ac-online-profile-info span {font-size:12px}
+.ac-online-profile-info {margin-top:24px}
+.ac-online-avatar {display:flex;align-items:center;justify-content:center;width:76px;height:76px;border-radius:50%;overflow:hidden;background:#e3f3ef;color:var(--ac-brand);font-size:24px!important}
+.ac-online-avatar img {width:100%;height:100%;object-fit:cover}
+.ac-online-view {color:var(--ac-brand);margin-top:8px}
+@media(max-width:800px){.ac-online-mode .ac-doctors{max-height:none;overflow:auto}.ac-online-profile-info{margin-top:12px}.ac-online-grid{padding:14px}}
+
+/* Selected doctor profile belongs to the main appointment workspace. */
+.ac-online-mode:not(.ac-online-grid-mode) .ac-panel {display:grid;grid-template-columns:260px minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.ac-online-mode .ac-panel > .ac-online-profile {grid-column:1;grid-row:1;overflow-y:auto;border-right:1px solid var(--ac-border);background:#fff}
+.ac-online-mode:not(.ac-online-grid-mode) .ac-panel > .ac-queue-view,
+.ac-online-mode:not(.ac-online-grid-mode) .ac-panel > .ac-detail-view {grid-column:2;grid-row:1;min-width:0;min-height:0}
+@media(max-width:1000px){.ac-online-mode:not(.ac-online-grid-mode) .ac-panel{grid-template-columns:210px minmax(0,1fr)}}
+@media(max-width:650px){
+.ac-online-mode:not(.ac-online-grid-mode) .ac-panel{display:flex;flex-direction:column;max-height:none}
+.ac-online-mode .ac-panel > .ac-online-profile{border-right:0;border-bottom:1px solid var(--ac-border);flex-shrink:0}
+.ac-online-mode:not(.ac-online-grid-mode) .ac-panel > .ac-queue-view{height:65vh;flex-shrink:0}
+}
+/* Online appointment dashboard, adapted from the supplied design. */
+.ac-online-mode {--ac-border:#e2e8f0;--ac-brand:#115e59;--ac-ink:#0f172a;--ac-muted:#64748b}
+.ac-online-mode .ac-topbar {padding:20px 28px;background:#fff}
+.ac-online-mode .ac-topbar h1 {font-weight:800;letter-spacing:-.6px}
+.ac-online-mode .ac-search {background:#f8fafc;border-color:#e2e8f0;border-radius:12px;min-width:280px}
+.ac-online-mode .ac-btn {border-radius:10px;font-weight:600}
+.ac-online-mode .ac-doctors {width:245px;background:#fff}
+.ac-online-mode .ac-doctor {border-radius:12px;margin:4px 12px;width:calc(100% - 24px);padding:14px 10px}
+.ac-online-mode .ac-doctor.selected {background:#f0fdfa;border:1px solid #99f6e4;box-shadow:none}
+.ac-online-mode .ac-legend {margin:16px 12px;padding:16px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px}
+.ac-online-mode .ac-panel,.ac-online-mode:not(.ac-online-grid-mode) .ac-panel {display:flex;flex-direction:column;background:#f8fafc;min-width:0}
+.ac-online-mode .ac-panel > .ac-online-profile {flex-shrink:0;overflow:visible;border:0;border-bottom:1px solid #e2e8f0;padding:22px 26px;background:#fff}
+.ac-online-mode .ac-online-profile > [data-doctor] {float:right;font-size:11px}
+.ac-online-mode .ac-online-profile-info {display:grid;grid-template-columns:72px minmax(0,1fr);gap:4px 18px;align-items:center;text-align:left;margin:0;padding-right:95px}
+.ac-online-mode .ac-online-profile-info .ac-online-avatar {grid-column:1;grid-row:1 / span 7;width:64px;height:64px;box-shadow:0 0 0 4px #f1f5f9}
+.ac-online-mode .ac-online-profile-info > :not(.ac-online-avatar) {grid-column:2}
+.ac-online-mode .ac-online-profile-info strong {font-size:18px}
+.ac-online-mode .ac-online-profile-info b {font-size:12px;color:#334155}
+.ac-online-mode .ac-panel > .ac-queue-view {flex:1;min-height:0;height:auto}
+.ac-online-mode .ac-counts {padding:22px 24px 0;gap:10px;background:transparent;border:0;flex-shrink:0}
+.ac-online-mode .ac-counts > button {flex:1;min-width:70px;border-radius:12px;background:#fff;border:1px solid #e2e8f0;padding:10px;box-shadow:0 1px 2px #0f172a05}
+.ac-online-mode .ac-counts > button.selected {border-color:#0f766e;background:#f0fdfa;box-shadow:0 0 0 1px #0f766e}
+.ac-online-mode .ac-counts b {border-radius:8px;font-size:20px;padding:7px}
+.ac-online-mode .ac-counts > button > span {font-size:9px;font-weight:700;letter-spacing:.5px;margin-bottom:7px}
+.ac-schedule-toolbar {display:flex;align-items:center;justify-content:space-between;gap:12px;flex:0 0 100%;padding:16px 0 8px;color:#64748b;font-size:11px}
+.ac-schedule-toolbar strong {font-size:10px;letter-spacing:.7px}
+.ac-schedule-toolbar strong span {display:inline-block;background:#e2e8f0;color:#334155;border-radius:5px;padding:4px 7px;letter-spacing:0;margin-left:7px}
+.ac-schedule-toolbar label {margin:0;white-space:nowrap}
+.ac-online-sort {background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:6px;color:#334155;margin-left:6px}
+.ac-online-mode .ac-queue-list {padding:12px 24px 24px}
+.ac-online-mode .ac-online-doctor {display:none}
+.ac-online-mode .ac-booking {width:100%;max-width:none;padding:18px 20px;border-radius:14px;border:1px solid #e2e8f0;border-left:4px solid #0f766e!important;box-shadow:0 1px 3px #0f172a04;transition:box-shadow .15s,border-color .15s}
+.ac-online-mode .ac-booking:hover {border-color:#99f6e4;box-shadow:0 4px 12px #0f172a09}
+.ac-online-mode .ac-booking time {border-right:1px solid #e2e8f0;padding-right:16px;margin-right:6px;min-width:92px;font-weight:700;color:#334155}
+.ac-online-mode .ac-booking-date {font-weight:500;color:#64748b}
+.ac-online-mode .ac-booking strong {font-size:14px;font-weight:700}
+.ac-online-mode .ac-badge {border-radius:20px;font-size:10px;font-weight:600;padding:4px 9px}
+.ac-online-mode .ac-online-card {box-shadow:0 2px 5px #0f172a04}
+.ac-drawer-backdrop {display:none}
+.ac-online-mode.ac-drawer-open .ac-drawer-backdrop {display:block;position:fixed;inset:0;background:#0f172a66;backdrop-filter:blur(3px);z-index:1039}
+.ac-online-mode.ac-drawer-open .ac-panel > .ac-detail-view {position:fixed;top:0;right:0;bottom:0;width:min(470px,100vw);height:100dvh;max-height:none;z-index:1040;background:#fff;box-shadow:-12px 0 40px #0f172a26;animation:ac-drawer-enter .18s ease-out}
+.ac-online-mode .ac-detail-top {background:#f8fafc;padding:16px 22px;border-bottom:1px solid #e2e8f0}
+.ac-online-mode .ac-patient-heading {padding:18px 24px;background:#f8fafc;border-bottom:1px solid #e2e8f0}
+.ac-online-mode .ac-patient-heading h2 {font-size:20px;font-weight:750;margin:6px 0}
+.ac-booking-reference {display:block;font-family:monospace;font-size:10px;color:#64748b;overflow-wrap:anywhere}
+.ac-online-mode .ac-detail-scroll {padding:22px;flex:1;min-height:0;overflow-y:auto}
+.ac-drawer-summary,.ac-drawer-doctor,.ac-drawer-consult {display:flex;flex-direction:column;align-items:flex-start;gap:8px;border:1px solid #e2e8f0;border-radius:14px;padding:16px;margin-bottom:18px;background:#f8fafc;font-size:12px}
+.ac-drawer-summary small,.ac-drawer-doctor small,.ac-detail-section-title,.ac-action-title {font-size:10px;font-weight:700;letter-spacing:.8px;color:#64748b}
+.ac-drawer-doctor {background:#fff}
+.ac-drawer-consult {background:#ecfdf5;border-color:#a7f3d0;color:#065f46}
+.ac-detail-section-title {margin:20px 0 12px}
+.ac-online-mode .ac-detail-scroll dl {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.ac-online-mode .ac-detail-field {display:block;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;overflow-wrap:anywhere}
+.ac-online-mode .ac-detail-field dt {font-size:10px;color:#64748b;margin-bottom:5px}
+.ac-online-mode .ac-detail-field dd {font-size:12px;font-weight:600;margin:0}
+.ac-online-mode .ac-detail-actions {display:flex;flex-wrap:wrap;gap:8px;padding:18px 22px;background:#f8fafc;border-top:1px solid #e2e8f0;max-height:32vh;overflow:auto;flex-shrink:0}
+.ac-online-mode .ac-detail-actions .ac-btn {flex:1 1 45%;font-size:11px}
+.ac-action-title {flex:0 0 100%;margin-bottom:4px}
+@keyframes ac-drawer-enter {from{transform:translateX(100%)}to{transform:translateX(0)}}
+@media(prefers-reduced-motion:reduce){.ac-online-mode.ac-drawer-open .ac-panel > .ac-detail-view{animation:none}}
+@media(max-width:1000px){.ac-online-mode .ac-doctors{width:205px}.ac-online-mode .ac-counts{padding:14px 12px 0}.ac-online-mode .ac-queue-list{padding:12px}.ac-schedule-toolbar{flex-wrap:wrap}}
+@media(max-width:650px){.ac-online-mode .ac-doctors{width:100%}.ac-online-mode .ac-panel > .ac-online-profile{padding:18px 12px}.ac-online-mode .ac-online-profile-info{padding-right:0}.ac-online-mode .ac-online-profile > [data-doctor]{float:none;margin-bottom:14px}.ac-online-mode .ac-panel > .ac-queue-view{min-height:450px}.ac-online-mode .ac-search{min-width:0}}
+.ac-online-mode {font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
+
+/* Match the supplied dashboard: profile and date navigation share its banner. */
+.ac-online-mode:not(.ac-online-grid-mode) .ac-panel > .ac-online-profile {display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.ac-online-mode .ac-online-profile > [data-doctor] {display:none}
+.ac-online-mode .ac-online-profile-info {padding-right:0;flex:1;min-width:250px}
+.ac-online-mode .ac-online-profile > .ac-date-controls {background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:5px;gap:4px;flex-wrap:wrap}
+.ac-online-mode .ac-online-profile .ac-period {font-size:12px;min-width:125px}
+.ac-online-mode .ac-online-profile .ac-calendar-date {max-width:130px}
+.ac-online-mode .ac-online-profile-info > small {display:none}
+.ac-online-mode .ac-online-profile-info {display:flex;align-items:center;gap:16px;min-width:320px}
+.ac-banner-avatar {position:relative;display:flex;align-items:center;justify-content:center;flex-shrink:0;width:64px;height:64px;border-radius:50%;background:#f0fdfa;box-shadow:0 0 0 4px #f1f5f9;color:#0f766e;font-size:20px}
+.ac-banner-avatar img {width:100%;height:100%;border-radius:50%;object-fit:cover}
+.ac-banner-avatar i {position:absolute;right:0;bottom:0;width:14px;height:14px;border:2px solid white;border-radius:50%;background:#94a3b8}
+.ac-banner-avatar i.enabled {background:#10b981}
+.ac-banner-bio {min-width:0}
+.ac-banner-name {display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ac-banner-degree {font-size:10px!important;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:4px;padding:2px 8px;color:#475569}
+.ac-banner-specialty {font-size:12px;color:#64748b;margin-top:3px}
+.ac-banner-meta {display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:5px;font-size:11px;color:#64748b}
+.ac-banner-meta span {display:flex;align-items:center;gap:4px;font-size:11px!important}
+.ac-banner-meta svg {width:13px;height:13px;color:#10b981}
+.ac-banner-meta b {font-size:11px!important;color:#334155}
+.ac-banner-controls {display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ac-online-mode .ac-banner-controls .ac-date-controls {display:flex;align-items:center;gap:4px;border:1px solid #e2e8f0;border-radius:12px;padding:4px;background:white;box-shadow:0 1px 2px #0f172a08}
+.ac-online-mode .ac-banner-controls .ac-btn {padding:5px 9px;min-height:26px;font-size:12px;border-radius:8px}
+.ac-online-mode .ac-banner-controls .ac-icon-btn {border:0;width:27px;padding:4px}
+.ac-online-mode .ac-banner-controls .ac-calendar-date {height:28px;border-radius:7px;background:#f8fafc;font-size:12px}
+.ac-online-view-switch {display:flex;gap:3px;align-items:center;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:12px;padding:4px;font-size:11px;color:#94a3b8}
+.ac-online-view-switch span {padding:0 8px;font-weight:600}
+.ac-online-view-switch button {border:0;background:transparent;border-radius:8px;padding:5px 12px;color:#64748b;font-size:12px}
+.ac-online-view-switch button.selected {background:#fff;color:#0f172a;font-weight:700;box-shadow:0 1px 3px #0f172a10}
+@media(max-width:650px){.ac-online-mode .ac-online-profile-info{min-width:0}.ac-banner-controls{width:100%}.ac-banner-meta{align-items:flex-start}}
+/* Keep doctor identity and details left aligned within the banner. */
+.ac-online-mode .ac-online-profile-info {justify-content:flex-start;text-align:left}
+.ac-online-mode .ac-banner-bio {text-align:left}
+.ac-online-mode .ac-banner-name,.ac-online-mode .ac-banner-meta {justify-content:flex-start;text-align:left}
+/* Compact horizontal doctor header matching the reference screenshot. */
+.ac-online-mode:not(.ac-online-grid-mode) .ac-panel > .ac-online-profile {padding:24px;min-height:112px;box-sizing:border-box;gap:20px}
+.ac-online-mode .ac-online-profile-info {flex-direction:row;justify-content:flex-start;align-items:center;gap:16px;margin:0;flex:1 1 360px;min-width:0;text-align:left}
+.ac-online-mode .ac-banner-bio {flex:0 1 auto;min-width:0;text-align:left}
+.ac-online-mode .ac-banner-name strong {font-size:18px;line-height:24px;font-weight:700}
+.ac-online-mode .ac-banner-specialty {line-height:18px;margin-top:2px}
+.ac-online-mode .ac-banner-meta {line-height:18px;margin-top:2px}
+.ac-online-mode .ac-banner-controls {flex:0 0 auto;margin-left:auto;justify-content:flex-end}
+.ac-online-mode .ac-banner-controls .ac-date-controls {margin:0}
+@media(max-width:1100px){.ac-online-mode .ac-banner-controls{margin-left:0;justify-content:flex-start}}
+@media(max-width:650px){.ac-online-mode:not(.ac-online-grid-mode) .ac-panel > .ac-online-profile{padding:18px 16px}.ac-online-mode .ac-online-profile-info{flex-basis:100%}}
+/* Doctor photo, qualification, disease chips and appointment total. */
+.ac-online-mode .ac-banner-avatar {width:120px;height:120px;border-radius:18px;box-shadow:0 4px 12px #0f172a16;overflow:hidden}
+.ac-online-mode .ac-banner-avatar img {border-radius:18px}
+.ac-online-mode .ac-banner-name strong {font-size:21px;line-height:28px}
+.ac-banner-qualification {font-size:12px;color:#64748b;margin-top:6px}
+.ac-banner-diseases {display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.ac-banner-diseases > span {background:#edf4f8;color:#28516d;padding:4px 10px;border-radius:20px;font-size:11px;line-height:16px}
+.ac-online-mode .ac-banner-meta {margin-top:10px}
+.ac-online-mode .ac-banner-meta .ac-appointment-tag {display:inline-block;background:#1e293b;color:#fff;border-radius:7px;padding:5px 10px;font-size:12px!important;line-height:18px}
+@media(max-width:650px){.ac-online-mode .ac-banner-avatar{width:86px;height:86px}.ac-online-mode .ac-banner-name strong{font-size:18px}}
+.ac-rail-link .ac-nav-icon {width:21px;height:21px;flex-shrink:0;display:block}
+
+.ac-status-actions {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;flex:0 0 100%}
+.ac-status-actions .ac-action-title {grid-column:1 / -1}
+.ac-status-actions .ac-status-approve {color:#1e40af;background:#dbeafe;border-color:#93c5fd}
+.ac-status-actions .ac-status-check_in {color:#065f46;background:#d1fae5;border-color:#6ee7b7}
+.ac-status-actions .ac-status-complete {color:#6b21a8;background:#f3e8ff;border-color:#d8b4fe}
+.ac-status-actions .ac-status-cancel {color:#9f1239;background:#ffe4e6;border-color:#fda4af}
+.ac-status-actions .ac-btn:disabled {opacity:.65;cursor:default}
+
+.ac-status-actions .ac-status-cancel {grid-column:1}
+.ac-status-actions .ac-open-source {grid-column:2}
+
+.ac-status-actions [data-action="change-doctor"] {color:#92400e;background:#fef3c7;border-color:#fcd34d}
+.ac-status-actions .ac-open-source {color:#155e75;background:#cffafe;border-color:#67e8f9}
+.ac-status-actions .ac-btn:not(:disabled):hover {filter:brightness(.96)}
+.ac-top-actions .ac-refresh-btn {width:36px;height:36px;min-width:36px;min-height:36px;flex-shrink:0;padding:0;border:0;border-radius:10px;background:var(--ac-brand);color:#fff;box-shadow:0 2px 6px #0f172a1f}
+.ac-top-actions .ac-refresh-btn:hover {background:var(--ac-brand-hover);color:#fff;box-shadow:0 3px 8px #0f172a29}
+/* Reserve equal label space so wrapped status names do not shift the counts. */
+.ac-counts > button {display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start}
+.ac-counts > button > span {display:flex;align-items:center;justify-content:center;min-height:24px;height:24px;line-height:12px;text-align:center;flex-shrink:0}
+.ac-counts > button > b {display:flex;align-items:center;justify-content:center;line-height:20px;min-height:30px;box-sizing:border-box}
