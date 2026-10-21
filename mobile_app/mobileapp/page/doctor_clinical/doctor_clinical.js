@@ -500,10 +500,6 @@
             this.$cal.fullCalendar("rerenderEvents");
         }
         renderDoctors() {
-            if(this.section === 'online' && this.onlineDefaultDoctor && this.doctors.length) {
-                this.doctor=this.doctors[0].id;
-                this.onlineDefaultDoctor=false;
-            }
             const groups = new Map(this.doctors.map(d => [d.id, {name: d.name, count: 0, awaiting: 0}]));
             this.rows.forEach(r => {
                 if (!groups.has(r.doctor_id)) groups.set(r.doctor_id, {name: r.doctor_name, count: 0, awaiting: 0});
@@ -553,7 +549,23 @@
             this.$root.find('.ac-toolbar-title').after($dates);
             const doctors=[...groups.values()].sort((a,b)=>a.name.localeCompare(b.name)).filter(d=>!this.search || d.count || [d.name,d.department,d.sr_qualification].filter(Boolean).join(' ').toLowerCase().includes(this.search.toLowerCase()));
             const $next=$('<div><div class="ac-counts"></div><div class="ac-queue-list ac-online-grid"></div></div>');
-            $next.find('.ac-queue-list').html(doctors.length ? doctors.map(d=>`<button class="ac-online-card" data-doctor="${esc(d.id)}">${this.onlineDoctorProfile(d,d.count)}<span class="ac-online-view">View appointments →</span></button>`).join('') : '<p class="ac-empty">No doctors found.</p>');
+            const appointments=this.rows.filter(r=>this.matches(r,false,false));
+            const awaiting=rows=>rows.filter(r=>['Pending','Approved'].includes(r.status)).length;
+            const active=rows=>rows.filter(r=>r.status==='Checked In').length;
+            $next.find('.ac-counts').addClass('ac-online-metrics').html([
+                ['Total Scheduled',appointments.length,'total'],['Awaiting Check-in',awaiting(appointments),'awaiting'],
+                ['Checked In / Active',active(appointments),'active'],['Completed',appointments.filter(r=>r.status==='Completed').length,'completed']
+            ].map(([label,count,tone])=>`<div class="ac-online-metric ${tone}"><span>${label}</span><strong>${count}</strong></div>`).join(''));
+            $next.find('.ac-queue-list').html(doctors.length ? doctors.map(d=>{
+                const rows=appointments.filter(r=>r.doctor_id===d.id).sort((a,b)=>a.date.localeCompare(b.date)||a.time.localeCompare(b.time));
+                const initials=(d.name||'Doctor').split(/\s+/).filter(Boolean).slice(0,2).map(v=>v[0]).join('');
+                const photo=typeof d.image==='string' && /^(\/(?!\/)|https?:\/\/)/i.test(d.image) ? `<img src="${esc(d.image)}" alt="" loading="lazy">` : esc(initials);
+                return `<article class="ac-online-card ac-schedule-card" style="display:grid;grid-template-rows:1fr auto;height:auto;min-height:476px"><div class="ac-schedule-content">
+                    <div class="ac-schedule-profile"><span class="ac-online-avatar">${photo}</span><div class="ac-schedule-specialty">${d.sr_qualification?`<b>${esc(d.sr_qualification)}</b>`:''}<span>${esc((d.diseases||[]).join(', ')||d.department||'')}</span></div></div>
+                    <h3>${esc(d.name)}</h3><div class="ac-schedule-stats"><div><small>Awaiting Check-in</small><strong>${awaiting(rows)} patients</strong></div><div><small>Checked In / Active</small><strong>${active(rows)} active</strong></div></div>
+                    <h4>Schedule (${rows.length} total)</h4><div class="ac-schedule-preview" tabindex="0" aria-label="Appointment schedule">${rows.map(r=>`<div><time>${esc(moment(r.time, "HH:mm:ss").format("hh:mm A"))}</time><span>${esc(r.patient_name)}</span><small class="ac-badge ${esc(r.status.toLowerCase().replaceAll(' ','-'))}">${esc(r.status)}</small></div>`).join('')||'<p>No appointments for this selection</p>'}</div></div>
+                    <div class="ac-schedule-footer"><span class="ac-schedule-date"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 10h16m-12 5 2 2 5-5"/></svg>${esc(this.date.format('MMM D, YYYY'))}</span><button class="ac-btn" data-doctor="${esc(d.id)}">View Schedule →</button></div></article>`;
+            }).join('') : '<p class="ac-empty">No doctors found.</p>');
             this.reconcileQueue($next);
             return true;
         }
@@ -778,7 +790,7 @@
             this.$root.find(".ac-rail-link").removeClass("active").removeAttr("aria-current")
                 .filter(`[data-action="${section}"]`).addClass("active").attr("aria-current", "page");
             if (!opd) this.opd.hide();
-            if (section === "online") {this.onlineDefaultDoctor=true;this.onlineView="Day";this.doctor="";this.queue="All";this.search="";this.$root.find(".ac-search").val("");this.setOnlineDate(moment(frappe.datetime.get_today()));}
+            if (section === "online") {this.onlineView="Day";this.doctor="";this.queue="All";this.search="";this.$root.find(".ac-search").val("");this.setOnlineDate(moment(frappe.datetime.get_today()));}
             else if (settings) this.showSettings();
             else if (opd) this.opd.show();
             else if (doctors) this.directory.show();

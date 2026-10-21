@@ -156,7 +156,7 @@ frappe.provide('mobile_app');
                 const url=new URL(location.href);url.searchParams.set('clinic',this.clinic);history.replaceState(null,'',url);
                 this.shell();await this.refresh();
             });
-            this.$root.on('change','[data-opd-date]',event=>{this.queueOffset=0;this.queueDate=event.target.value||frappe.datetime.get_today();this.refresh();});
+            this.$root.on('change','[data-opd-date]',event=>{this.queueHistory=true;this.queueOffset=0;this.queueDate=event.target.value||frappe.datetime.get_today();this.refresh();});
             this.$root.on('input change','[data-queue-filter]',event=>{
                 this.queueSearch=this.$root.find('[data-queue-filter="search"]').val()||'';
                 this.queueStatus=this.$root.find('[data-queue-filter="status"]').val()||'';
@@ -168,7 +168,13 @@ frappe.provide('mobile_app');
         async show(){
             if(!this.visible){frappe.realtime.on('opd_queue_changed',this.changed);frappe.realtime.socket?.on('connect',this.connected);frappe.realtime.socket?.on('disconnect',this.disconnected);document.addEventListener('visibilitychange',this.focus);}
             this.visible=true;this.baseline=null;
-            if(!frappe.realtime.socket?.connected) frappe.realtime.socket?.connect();
+            // Keep the activity channel recovering after temporary tunnel/network outages.
+            // These retries reconnect the socket; they do not poll queue snapshots.
+            const socket=frappe.realtime.socket;
+            socket?.io?.reconnection(true);
+            socket?.io?.reconnectionAttempts(Infinity);
+            socket?.io?.reconnectionDelayMax(10000);
+            if(!socket?.connected) socket?.connect();
             if(this.display){window.addEventListener('resize',this.fitDisplay);document.addEventListener('fullscreenchange',this.fitDisplay);requestAnimationFrame(this.fitDisplay);}
             try{
                 this.boot=await read('bootstrap',{room:this.selectedRoom||null});
@@ -181,11 +187,23 @@ frappe.provide('mobile_app');
                 this.shell();await this.refresh();
             }catch(error){this.$root.html('<div class="opd-empty">Unable to load OPD. Check your connection and clinic access, then reload.</div>');}
         }
-        hide(){clearTimeout(this.searchTimer);window.removeEventListener('resize',this.fitDisplay);document.removeEventListener('fullscreenchange',this.fitDisplay);this.visible=false;++this.serial;frappe.realtime.off('opd_queue_changed',this.changed);frappe.realtime.socket?.off('connect',this.connected);frappe.realtime.socket?.off('disconnect',this.disconnected);document.removeEventListener('visibilitychange',this.focus);}
+        hide(){clearInterval(this.displayClockTimer);clearTimeout(this.searchTimer);window.removeEventListener('resize',this.fitDisplay);document.removeEventListener('fullscreenchange',this.fitDisplay);this.visible=false;++this.serial;frappe.realtime.off('opd_queue_changed',this.changed);frappe.realtime.socket?.off('connect',this.connected);frappe.realtime.socket?.off('disconnect',this.disconnected);document.removeEventListener('visibilitychange',this.focus);}
         connection(live){
             this.$root.find('.opd-connection').toggleClass('live',!!live).text(live?(this.display?'Live updates on activity':'Connected'):'Disconnected - displayed information may be outdated');
         }
+        updateDisplayClock(){
+            const now=new Date(), options={timeZone:this.data?.timezone || 'Asia/Kolkata'};
+            this.$root.find('.opd-live-clock').text(now.toLocaleTimeString('en-IN',{...options,hour:'2-digit',minute:'2-digit',second:'2-digit'}));
+            this.$root.find('.opd-live-date').text(now.toLocaleDateString('en-IN',{...options,weekday:'short',day:'numeric',month:'short',year:'numeric'}));
+        }
         shell(){
+            if(this.display){
+                this.$root.addClass('opd-smart-display');
+                this.$root.html(`<header class="opd-head"><div class="opd-display-brand"><img class="opd-hospital-logo" src="/assets/mobile_app/images/sriaas-logo.png" alt="SR Institute of Advanced Ayurvedic Sciences" width="64" height="64"><div><h1>OPD Patient Queue <small>WAITING ROOM</small></h1><p class="opd-live-date"></p></div></div><div class="opd-actions"><div class="opd-clock-block"><strong class="opd-live-clock"></strong><small>LIVE DISPLAY TIME</small></div><span class="opd-connection"></span>${btn('sound','Enable sound')}${btn('fullscreen','Full screen')}${btn('refresh','Refresh')}</div></header><div class="opd-instruction-bar"><strong>Please wait for your token to be called</strong><div>Tokens waiting: <b class="opd-waiting-total">—</b><span>Served today: <b class="opd-served-total">—</b></span></div></div><div class="opd-content"><div class="opd-empty">Loading queue...</div></div><footer class="opd-display-footer"><strong>OPD NOTICE</strong><span>Please keep your token handy. Proceed to the displayed OPD when called. For assistance, contact reception.</span></footer>`);
+                clearInterval(this.displayClockTimer);this.updateDisplayClock();
+                this.displayClockTimer=setInterval(()=>{if(this.visible&&!document.hidden)this.updateDisplayClock();},1000);
+                this.connection(!!frappe.realtime.socket?.connected);return;
+            }
             const title=this.display?'Please wait for your token to be called':'OPD Patient Flow';
             this.$root.html(`<header class="opd-head"><div><h1>${title}</h1>${this.display ? '' : `<p>${esc(this.boot.clinics.find(c=>c.name===this.clinic)?.clinic_name)}</p><label>Branch <select data-opd-branch aria-label="OPD branch">${this.boot.clinics.map(c=>`<option value="${esc(c.name)}" ${c.name===this.clinic?'selected':''}>${esc(c.clinic_name)}</option>`).join('')}</select></label>`}</div><div class="opd-actions"><span class="opd-connection"></span>${this.display?btn('sound','Enable sound')+btn('fullscreen','Full screen'):(this.host?.opdOnly?'':btn('calendar','Appointment calendar'))}${btn('refresh','Refresh')}</div></header>
                 ${this.display?'':`<nav class="opd-nav">${btn('queue','OPD Queue')}${btn('room','My OPD')}${this.boot.manager?btn('setup','OPD Setup'):''}${btn('tv','Waiting-Room Display')}${btn('branch-summary','Branch summary')}</nav>`}<div class="opd-content"><div class="opd-empty">Loading...</div></div>`);
@@ -217,7 +235,7 @@ frappe.provide('mobile_app');
                     if(result.exc||!result.message)throw new Error('Invalid display response');
                     data=result.message;
                 }else if(this.section==='queue'){
-                    data=await read('queue_snapshot',{clinic:this.clinic,date:this.queueDate||frappe.datetime.get_today(),offset:this.queueOffset||0,search:this.queueSearch||'',status:this.queueStatus||''});
+                    data=await read('queue_snapshot',{active_only:this.queueHistory?0:1,clinic:this.clinic,date:this.queueDate||frappe.datetime.get_today(),offset:this.queueOffset||0,search:this.queueSearch||'',status:this.queueStatus||''});
                 }else data=await read(this.section==='setup'?'get_setup':'snapshot',{clinic:this.clinic});
                 if(scope!==[this.clinic,this.section,this.queueDate,this.queueOffset,this.queueSearch,this.queueStatus].join('|')){
                     this.refreshPending=true;return;
@@ -500,11 +518,22 @@ frappe.provide('mobile_app');
             if(['complete','complete_next','absent','end'].includes(action) && !await confirm({complete_next:'Finish this patient&#39;s stage and call the next waiting patient? If nobody is waiting, the room stays available.',complete:'Complete this stage and move the patient to the next step?',absent:'Mark this patient absent and release the room?',end:'End your room session?'}[action]))return;
             await send({});
         }
+        checkinListRows(){
+            return (this.data?.checked_in || this.data?.upcoming || []).filter(v=>(v.status || 'Waiting')==='Waiting');
+        }
+        renderCheckinList(){
+            const rows=this.checkinListRows();
+            this.$root.find('.opd-upcoming-list').html(rows.map((v,i)=>`<div class="opd-upcoming-item"><span class="opd-queue-position">${i+1}</span><div><strong>${esc(v.token)}</strong><span>${esc(v.patient_name)}</span><small>${esc(v.status || 'Waiting')}</small><b class="opd-patient-room">OPD ${esc(v.room)}</b></div></div>`).join('') || '<p class="opd-upcoming-empty">No patients waiting.</p>');
+        }
         renderTV(){
             const d=this.data, fresh=this.baseline!=null?d.calls.filter(c=>c.call_id>this.baseline):[];
             if(fresh.length)this.chime();
             this.baseline=d.sequence;
-            this.$root.find('.opd-content').html(`<div class="opd-tv-grid ${d.calls.length === 1 ? 'opd-tv-single' : d.calls.length === 4 ? 'opd-tv-four' : ''}">${d.calls.map(c=>`<article class="opd-tv-card ${fresh.some(x=>x.call_id===c.call_id)?'fresh':''}"><div class="opd-badge">${esc(c.stage)}</div><div class="opd-tv-token">${esc(c.token)}</div><div class="opd-tv-name">${esc(c.patient_name)}</div><div class="opd-tv-room"><span>Please go to</span><strong class="opd-tv-room-tag">OPD ${esc(c.room)}</strong></div>${c.visit_date!==d.date?`<small>Visit date: ${esc(c.visit_date)}</small>`:''}</article>`).join('')||'<div class="opd-empty"><h2>Please take a seat</h2><p>Your token and room will appear here when called.</p></div>'}</div>`);
+            this.$root.find('.opd-waiting-total').text(d.waiting_count ?? 0);
+            this.$root.find('.opd-served-total').text(d.served_today ?? 0);
+            const upcoming=(d.upcoming || []).slice(0,5);
+            this.$root.find('.opd-content').html(`<div class="opd-display-layout"><section class="opd-calling-panel"><div class="opd-display-section-title"><h2>Currently calling</h2><span>${d.calls.length} active ${d.calls.length === 1 ? 'call' : 'calls'}</span></div><div class="opd-tv-grid ${d.calls.length === 1 ? 'opd-tv-single' : d.calls.length >= 4 ? 'opd-tv-four' : ''}" style="--call-rows:${Math.max(1,Math.ceil(d.calls.length/2))}">${d.calls.map(c=>`<article class="opd-tv-card ${fresh.some(x=>x.call_id===c.call_id)?'fresh':''}"><div class="opd-badge">${esc(c.stage)}</div><div class="opd-tv-token">${esc(c.token)}</div><div class="opd-tv-name">${esc(c.patient_name)}</div><div class="opd-tv-room"><span>Please go to</span><strong class="opd-tv-room-tag">OPD ${esc(c.room)}</strong></div></article>`).join('')||'<div class="opd-empty"><h2>Please take a seat</h2><p>Your token and room will appear here when called.</p></div>'}</div></section><aside class="opd-upcoming-panel"><div class="opd-display-section-title"><h2>Waiting patients</h2><span>${this.checkinListRows().length} listed</span></div><div class="opd-upcoming-card"><div class="opd-upcoming-list" tabindex="0" role="region" aria-label="Waiting patients">${upcoming.map((v,i)=>`<div class="opd-upcoming-item"><span class="opd-queue-position">${i+1}</span><div><strong>${esc(v.token)}</strong><span>${esc(v.patient_name)}</span></div><b>OPD ${esc(v.room)}</b></div>`).join('') || '<p class="opd-upcoming-empty">No patients waiting.</p>'}</div><div class="opd-queue-guidance"><strong>Queue guidance</strong><p>Each OPD calls its own queue. If you missed your call, please contact reception.</p></div></div></aside></div>`);
+            this.renderCheckinList();
         }
         chime(){
             if(!this.audio || this.audio.state!=='running')return;
@@ -525,11 +554,11 @@ frappe.provide('mobile_app');
                     const preview=await read('preview_end_day',{clinic:this.clinic,date:this.queueDate});
                     const d=new frappe.ui.Dialog({title:'End day - '+preview.date,fields:[
                         {fieldtype:'HTML',fieldname:'preview'},
-                        {fieldtype:'Check',fieldname:'close_visits',label:'Close unfinished visits as Withdrawn',default:1,description:'Includes earlier dates. Completed visits and token history are preserved.'},
+                        {fieldtype:'HTML',options:'<p>End Day closes unfinished visits as Withdrawn and clears them from the live display. Visit history remains available using the queue date selector.</p>'},
                         {...reasonField}
                     ],primary_action_label:'Confirm end day',primary_action:async values=>{
                         d.disable_primary_action();
-                        try{const result=await this.mutate('end_day',{date:preview.date,expected_sequence:preview.sequence,reason:values.reason,close_visits:values.close_visits});d.hide();frappe.show_alert(`${result.closed_rooms.length} room sessions closed; ${result.closed_visits.length} visits withdrawn.`);}
+                        try{this.queueHistory=false;this.queueOffset=0;const result=await this.mutate('end_day',{date:preview.date,expected_sequence:preview.sequence,reason:values.reason,close_visits:1});d.hide();frappe.show_alert(`${result.closed_rooms.length} room sessions closed; ${result.closed_visits.length} visits withdrawn.`);}
                         finally{d.enable_primary_action();}
                     }});
                     d.fields_dict.preview.$wrapper.html(`<p>${preview.rooms.length} empty room sessions will close. Closing unfinished visits also releases their called/in-progress patients and closes those room sessions.</p><p>${preview.visits.length} unfinished visits through this date:</p><div style="max-height:260px;overflow:auto">${preview.visits.map(v=>`<p><b>${esc(v.token)}</b> - ${esc(v.patient_name)} - ${esc(v.visit_date)} - ${esc(v.stages[v.stage_index].state)}</p>`).join('')||'<p>None</p>'}</div>${preview.blocked.length?'<div class="opd-notice">Called/in-progress patients will be released automatically when you close unfinished visits. Their treatment will not be marked completed.</div>':''}`);

@@ -21,7 +21,7 @@
  "public": 1,
  "quick_lists": [],
  "roles": [],
- "sequence_id": 40,
+ "sequence_id": 0.5,
  "shortcuts": [
   {"color": "Green", "doc_view": "List", "label": "Mobile App User", "link_to": "Mobile App User", "type": "DocType"},
   {"color": "Blue", "doc_view": "List", "label": "Mobile App Appointments", "link_to": "Mobile App Appointment", "type": "DocType"},

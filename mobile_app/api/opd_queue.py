@@ -808,7 +808,7 @@ def _day_state(clinic, date):
     return selected, unfinished, sessions
 
 
-def _daily_visits(clinic, date=None, offset=0, page_length=100, search="", status=""):
+def _daily_visits(clinic, date=None, offset=0, page_length=100, search="", status="", active_only=0):
     date = getdate(date)
     offset = max(0,cint(offset)); page_length = min(200,max(1,cint(page_length)))
     counts = {'Total':0, 'Waiting':0, 'Called':0, 'In Progress':0, 'On Hold':0, 'Completed':0, 'Withdrawn':0}
@@ -820,6 +820,8 @@ def _daily_visits(clinic, date=None, offset=0, page_length=100, search="", statu
         counts['Total'] += group.total
     where = "w.opd_clinic=%s AND w.opd_visit_date=%s AND w.opd_payload IS NOT NULL AND w.opd_payload != ''"
     params = [clinic,date]
+    if cint(active_only):
+        where += " AND w.opd_status='Active'"
     join = ""
     search = str(search or '').strip().lower()[:200]
     if status:
@@ -837,7 +839,7 @@ def _daily_visits(clinic, date=None, offset=0, page_length=100, search="", statu
                     GREATEST(3,CHAR_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(w.opd_payload,'$.token_number')))), '0'))))) > 0"""
         params.append(search)
     filtered_total = frappe.db.sql(f"SELECT COUNT(*) FROM `tabMobile Appointment Workflow` w{join} WHERE {where}",
-        tuple(params))[0][0] if search or status else counts['Total']
+        tuple(params))[0][0] if search or status or cint(active_only) else counts['Total']
     offset = min(offset, max(0, (filtered_total-1)//page_length)*page_length)
     # Filtering and pagination both happen in SQL, including searches beyond page one.
     payloads = frappe.db.sql(f"""SELECT w.opd_payload FROM `tabMobile Appointment Workflow` w{join}
@@ -857,9 +859,9 @@ def daily_visits(clinic, date=None, offset=0, page_length=100, search="", status
 
 
 @frappe.whitelist()
-def queue_snapshot(clinic, date=None, offset=0, page_length=100, search="", status=""):
+def queue_snapshot(clinic, date=None, offset=0, page_length=100, search="", status="", active_only=0):
     data = _snapshot(clinic, include_visits=False)
-    daily = _daily_visits(clinic, date, offset, page_length, search, status)
+    daily = _daily_visits(clinic, date, offset, page_length, search, status, active_only)
     data.update(visits=daily['visits'], daily=daily)
     return data
 
@@ -960,13 +962,31 @@ def display_snapshot(clinic=None):
         if not frappe.cache.get_value(heartbeat_key, expires=True):
             session.update(force=True)
             frappe.cache.set_value(heartbeat_key, 1, expires_in_sec=60)
-    for session in _all('Session',filters={'clinic':clinic,'status':['!=','Closed'],'current_visit':['is','set']},fields=['room','current_visit','call_sequence']):
+    for session in _all('Session',filters={'clinic':clinic,'status':['!=','Closed'],'current_visit':['is','set']},fields=['name','room','current_visit','call_sequence']):
         visit=_doc('Visit',session.current_visit); stage=visit.stages[visit.stage_index]
-        if stage.state!='Called':continue
+        if (visit.status != 'Active' or stage.state != 'Called' or stage.session != session.name
+                or stage.room != session.room or not stage.get('called_at')
+                or getdate(stage.called_at) != getdate()): continue
         room=_doc('Room',session.room)
         calls.append({'call_id':session.call_sequence,'token':_visit_data(visit)['token'],
             'visit_date':str(visit.visit_date),'patient_name':visit.patient_name,'room':room.room_number,'stage':stage.stage})
-    return {'clinic_name':doc.clinic_name,'sequence':doc.event_sequence,'calls':calls,'date':str(getdate())}
+    visits = store.records('Visit', {'clinic':clinic})
+    waiting = [v for v in visits if v.status == 'Active' and v.stages[v.stage_index].state == 'Waiting'
+        and v.stages[v.stage_index].get('queued_at') and getdate(v.stages[v.stage_index].queued_at) == getdate()]
+    waiting.sort(key=lambda v:(-cint(v.priority),str(v.stages[v.stage_index].queued_at),str(v.creation),v.name))
+    rooms = {r.name:r.room_number for r in store.records('Room', {'clinic':clinic})}
+    upcoming = [{'token':_visit_data(v)['token'], 'patient_name':v.patient_name,
+        'room':rooms.get(v.stages[v.stage_index].room, ''), 'stage':v.stages[v.stage_index].stage} for v in waiting[:5]]
+    checked_in_visits = sorted((v for v in visits if getdate(v.visit_date) == getdate()),
+        key=lambda v:(cint(v.token_number),str(v.creation),v.name))
+    checked_in = [{'token':_visit_data(v)['token'], 'patient_name':v.patient_name,
+        'room':rooms.get(v.stages[v.stage_index].room, ''), 'stage':v.stages[v.stage_index].stage,
+        'status':v.stages[v.stage_index].state if v.status == 'Active' else v.status} for v in checked_in_visits]
+    served = sum(v.status == 'Completed' and str(v.get('completed_at') or '')[:10] == str(getdate()) for v in visits)
+    return {'clinic_name':doc.clinic_name,'sequence':doc.event_sequence,'calls':calls,'date':str(getdate()),
+        'timezone':doc.get('timezone') or frappe.utils.get_system_timezone(),
+        'waiting_count':len(waiting),'served_today':served,'upcoming':upcoming,
+        'checked_in':checked_in,'checked_in_count':len(checked_in)}
 
 
 def preserve_clinic_progress(doc, method=None):

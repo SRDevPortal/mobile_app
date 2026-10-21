@@ -17,16 +17,27 @@ def refresh_module_map():
 
 
 def ensure_workspace():
-    """Restore a missing Desk workspace without replacing site customizations."""
-    if frappe.db.exists("Workspace", "Mobile App"):
-        return
+    """Ensure the public menu entry on both new and already-installed sites.
 
-    from frappe.modules.import_file import import_file_by_path
+    Keep site-specific shortcuts, content and role restrictions intact.
+    Workspace ordering does not grant access to its underlying documents.
+    """
+    if not frappe.db.exists("Workspace", "Mobile App"):
+        from frappe.modules.import_file import import_file_by_path
 
-    import_file_by_path(
-        frappe.get_app_path(
-            "mobile_app", "mobileapp", "workspace", "mobile_app", "mobile_app.json"
-        ),
-        force=True,
-    )
+        import_file_by_path(
+            frappe.get_app_path(
+                "mobile_app", "mobileapp", "workspace", "mobile_app", "mobile_app.json"
+            ),
+            force=True,
+        )
+
+    # Runs in install/migrate, including sites where the workspace already exists.
+    # Use DB updates to avoid exporting site-specific content into the standard file.
+    desired = {"public": 1, "is_hidden": 0, "parent_page": "", "sequence_id": 0.5}
+    current = frappe.db.get_value("Workspace", "Mobile App", list(desired), as_dict=True)
+    if any(current.get(key) != value for key, value in desired.items()):
+        frappe.db.set_value("Workspace", "Mobile App", desired)
+    frappe.clear_cache(doctype="Workspace")
+    # Sidebar module/permission results are cached per user by Frappe.
     frappe.clear_cache()

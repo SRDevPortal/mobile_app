@@ -653,3 +653,50 @@ class TestOPDQueue(unittest.TestCase):
         self.assertEqual(result['consultation_doctor'], 'Doctor A')
         self.assertEqual(other_room.stages[0].state, 'Waiting')
         save.assert_called_once_with(visit)
+
+    def test_display_snapshot_uses_actual_waiting_and_completed_visits(self):
+        visit = self.visit()
+        snapshot = api.display_snapshot(self.clinic)
+        self.assertEqual(snapshot['waiting_count'], 1)
+        self.assertEqual(snapshot['served_today'], 0)
+        self.assertEqual(snapshot['upcoming'][0]['token'], visit['token'])
+        self.assertEqual(snapshot['upcoming'][0]['room'], '1')
+        for number, doctor in [(1, None), (4, None), (6, 0)]:
+            session = self.open_room(number, doctor)
+            self.act(session, 'call_next')
+            snapshot = api.display_snapshot(self.clinic)
+            self.assertEqual(snapshot['waiting_count'], 0)
+            self.assertEqual(len(snapshot['calls']), 1)
+            self.act(session, 'start')
+            self.act(session, 'complete')
+            self.act(session, 'end')
+        snapshot = api.display_snapshot(self.clinic)
+        self.assertEqual(snapshot['served_today'], 1)
+        self.assertEqual(snapshot['upcoming'], [])
+        self.assertEqual(snapshot['calls'], [])
+    def test_display_excludes_old_calls_until_recalled_today(self):
+        visit = self.visit()
+        session = self.open_room(1)
+        yesterday = frappe.utils.add_days(frappe.utils.now_datetime(), -1)
+        with patch.object(api, 'now_datetime', return_value=yesterday):
+            self.act(session, 'call_next')
+        self.assertEqual(api.display_snapshot(self.clinic)['calls'], [])
+        self.act(session, 'recall')
+        self.assertEqual(len(api.display_snapshot(self.clinic)['calls']), 1)
+
+    def test_display_excludes_waiting_entries_from_previous_days(self):
+        with patch.object(api, 'now_datetime', return_value=frappe.utils.add_days(frappe.utils.now_datetime(), -1)):
+            self.visit()
+        snapshot = api.display_snapshot(self.clinic)
+        self.assertEqual(snapshot['waiting_count'], 0)
+        self.assertEqual(snapshot['upcoming'], [])
+
+    def test_display_lists_all_today_checkins_including_called_patients(self):
+        visits = [self.visit() for _ in range(6)]
+        session = self.open_room(1)
+        self.act(session, 'call_next')
+        snapshot = api.display_snapshot(self.clinic)
+        self.assertEqual(snapshot['checked_in_count'], 6)
+        self.assertEqual(len(snapshot['checked_in']), 6)
+        self.assertEqual(snapshot['checked_in'][0]['status'], 'Called')
+        self.assertEqual([row['token'] for row in snapshot['checked_in']], [v['token'] for v in visits])
