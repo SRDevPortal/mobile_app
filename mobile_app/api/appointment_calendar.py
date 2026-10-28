@@ -1,7 +1,7 @@
 """Permission-scoped appointment calendar and durable clinic queue transitions."""
 
 import hashlib
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import frappe
 from frappe import _
@@ -23,6 +23,8 @@ TRANSITIONS = {
 LEGACY_STATUSES = {"Rejected": "Cancelled", "In Consultation": "Checked In", "Completed": "Completed"}
 DOCTOR_CHANGE_ROLES = {"Appointment Agent", "Appointment Manager"}
 APPOINTMENT_STATUS_FIELD = "custom_appointment_status"
+RESCHEDULE_DATE_FIELD = "custom_reschedule_date"
+_CALENDAR_RESCHEDULE = object()
 
 
 
@@ -122,11 +124,21 @@ def _status(doc, workflow):
     return LEGACY_STATUSES.get(workflow.get("workflow_status"), workflow.get("workflow_status")) or "Pending"
 
 
+def _is_future_appointment(doc):
+    date = doc.get("pe_appointment_date") or doc.get("appointment_date") or doc.get("encounter_date")
+    return bool(date and getdate(date) > now_datetime().date())
+
+
+def _require_current_or_past(doc):
+    if _is_future_appointment(doc):
+        frappe.throw(_("Future appointments can only be opened or rescheduled. Other actions are available on the appointment date."))
+
+
 def _actions(doc, workflow, context):
     user, roles, manager = context
     status = _status(doc, workflow)
     if roles.intersection(RECEPTION_ROLES) and not manager:
-        return ["check_in"] if status == "Approved" else []
+        return ["check_in"] if status == "Approved" and not _is_future_appointment(doc) else []
     agent = _agent(doc, workflow)
     can_manage = manager or bool(roles.intersection(AGENT_ROLES) and agent == user)
     actions = []
@@ -138,7 +150,9 @@ def _actions(doc, workflow, context):
             continue
         if status in before and (bool(roles.intersection(RECEPTION_ROLES)) if action == "check_in" else can_manage):
             actions.append(action)
-    return actions
+    if can_manage and status in ("Pending", "Approved") and not cint(doc.get("docstatus")):
+        actions.append("reschedule")
+    return [action for action in actions if action == "reschedule"] if _is_future_appointment(doc) else actions
 
 
 def _serialize(doc, workflow, context, details=False):
@@ -161,7 +175,8 @@ def _serialize(doc, workflow, context, details=False):
                date=str(date) if date else None, time=get_time(time or "09:00:00").strftime("%H:%M:%S"),
                duration=cint(workflow.get("duration_minutes")) or 30,
                status=_status(doc, workflow), online=online, assigned_agent=_agent(doc, workflow),
-               can_change_doctor=bool(online and context[1].intersection(DOCTOR_CHANGE_ROLES) and
+               is_future=_is_future_appointment(doc),
+               can_change_doctor=bool(not _is_future_appointment(doc) and online and context[1].intersection(DOCTOR_CHANGE_ROLES) and
                    _status(doc, workflow) == "Pending"),
                actions=_actions(doc, workflow, context), encounter=encounter,
                checked_in_at=workflow.get("checked_in_at"),
@@ -364,7 +379,8 @@ def get_appointment(doctype, name):
 
 @frappe.whitelist(methods=["POST"])
 def update_appointment(doctype, name, action, expected_status, reason=None, agent=None,
-                       clinic=None, department=None, doctor=None, patient=None, request_id=None, route_id=None):
+                       clinic=None, department=None, doctor=None, patient=None, request_id=None, route_id=None,
+                       reschedule_date=None, expected_date=None):
     if action == "check_in" and not frappe.flags.opd_checkin:
         source = _source(doctype, name)
         online = source.get("sr_encounter_place") == "Online" if doctype == "Patient Encounter" else bool(source.get("is_online"))
@@ -383,6 +399,8 @@ def update_appointment(doctype, name, action, expected_status, reason=None, agen
     before = _status(doc, current)
     if before != expected_status:
         frappe.throw(_("The appointment changed. Refresh and try again."), frappe.TimestampMismatchError)
+    if action != "reschedule":
+        _require_current_or_past(doc)
     if action == "assign":
         if not context[2]:
             frappe.throw(_("Only an Appointment Manager or System Manager can assign agents."), frappe.PermissionError)
@@ -405,9 +423,11 @@ def update_appointment(doctype, name, action, expected_status, reason=None, agen
         state.workflow_status = before
         state.assigned_agent = _agent(doc, current)
     now = now_datetime()
+    if action == "reschedule":
+        old_date = _reschedule(doc, reschedule_date, expected_date)
     if action in ("assign", "claim"):
         state.assigned_agent = agent if action == "assign" else context[0]
-    else:
+    elif action != "reschedule":
         state.workflow_status = TRANSITIONS[action][1]
         if action in ("approve", "cancel"):
             state.decision_by, state.decision_at = context[0], now
@@ -420,6 +440,8 @@ def update_appointment(doctype, name, action, expected_status, reason=None, agen
     state.save(ignore_permissions=True)
     _sync_encounter_status(doc, state.workflow_status)
     message = f"{before} → {state.workflow_status}" if action not in ("assign", "claim") else f"Assigned to {state.assigned_agent}"
+    if action == "reschedule":
+        message = f"Appointment rescheduled: {old_date} to {getdate(reschedule_date)} (time unchanged)"
     if reason:
         message += f". Reason: {reason.strip()}"
     state.add_comment("Comment", text=frappe.utils.escape_html(message))
@@ -491,6 +513,47 @@ def _sync_clinic_status(doc, status, *, skip_invalid_links=False):
         clinic.add_comment("Comment", text=_("Appointment calendar: {0}").format(mapped))
 
 
+
+def _reschedule(doc, date, expected_date):
+    """Move the canonical booking date through normal scheduling validation."""
+    if doc.doctype == "Mobile App Appointment" and doc.get("patient_encounter"):
+        frappe.throw(_("Reschedule the linked encounter appointment."))
+    old_date = doc.get("pe_appointment_date") or doc.get("appointment_date") or doc.get("encounter_date")
+    if not expected_date or getdate(expected_date) != getdate(old_date):
+        frappe.throw(_("The appointment date changed. Refresh and try again."), frappe.TimestampMismatchError)
+    if not date:
+        frappe.throw(_("Choose a reschedule date."))
+    date = getdate(date)
+    if date < getdate(now_datetime()) or date == getdate(old_date):
+        frappe.throw(_("Choose a different date, today or later."))
+    time = doc.get("pe_appointment_time") or doc.get("appointment_time") or doc.get("encounter_time") or "09:00:00"
+    if datetime.combine(date, get_time(time)) <= now_datetime():
+        frappe.throw(_("The appointment time on the selected date has already passed."))
+    if doc.doctype == "Patient Encounter":
+        if not doc.meta.has_field(RESCHEDULE_DATE_FIELD):
+            frappe.throw(_("Run Mobile App migration before rescheduling encounters."))
+        doc.flags.calendar_reschedule = _CALENDAR_RESCHEDULE
+        doc.set(RESCHEDULE_DATE_FIELD, date)
+        doc.pe_appointment_date = date
+    else:
+        doc.appointment_date = date
+        doc.practitioner_schedule = None
+        from mobile_app.api.practitioners import _ONLINE_DOCTOR_CHANGE
+        doc.flags._online_doctor_change = _ONLINE_DOCTOR_CHANGE
+    doc.save(ignore_permissions=True)
+    return str(old_date)
+
+
+def protect_reschedule_date(doc, method=None):
+    """Only the authorized calendar action may write this encounter field."""
+    if not doc.meta.has_field(RESCHEDULE_DATE_FIELD):
+        return
+    if doc.flags.get("calendar_reschedule") is _CALENDAR_RESCHEDULE:
+        return
+    stored = None if doc.is_new() else frappe.db.get_value(doc.doctype, doc.name, RESCHEDULE_DATE_FIELD)
+    doc.set(RESCHEDULE_DATE_FIELD, stored)
+
+
 def sync_encounter_status(doc, method=None):
     """Maintain the read-only encounter field; form/API saves cannot bypass decisions."""
     if not doc.meta.has_field(APPOINTMENT_STATUS_FIELD):
@@ -535,6 +598,7 @@ def change_online_doctor(doctype, name, doctor, expected_doctor, expected_status
     current = _workflow(doctype, name)
     if not _can_read(doc, current, context):
         frappe.throw(_('You cannot change this appointment.'), frappe.PermissionError)
+    _require_current_or_past(doc)
     if doctype == 'Mobile App Appointment' and doc.get('patient_encounter'):
         frappe.throw(_('Change the doctor on the linked encounter appointment.'))
     online = doc.get('sr_encounter_place') == 'Online' if doctype == 'Patient Encounter' else bool(doc.get('is_online'))
@@ -578,3 +642,19 @@ def change_online_doctor(doctype, name, doctor, expected_doctor, expected_status
     # A prior identity lookup in this request must not return stale doctor details.
     frappe.local.appointment_calendar_doctors = {}
     return _serialize(doc,state,context,details=True)
+
+
+def normalize_clinic_appointment_status(doc, method=None):
+    """Match Select capitalization without changing clinical or workflow status."""
+    field = doc.meta.get_field("appointment_status")
+    if not field or field.fieldtype != "Select":
+        return
+    value = doc.get("appointment_status")
+    if not isinstance(value, str):
+        return
+    options = {option.strip().casefold(): option.strip()
+               for option in (field.options or "").splitlines() if option.strip()}
+    canonical = options.get(value.strip().casefold())
+    if canonical is not None:
+        doc.set("appointment_status", canonical)
+    # Unknown statuses remain untouched so normal Select validation rejects them.

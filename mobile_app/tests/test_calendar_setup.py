@@ -107,5 +107,99 @@ class TestCalendarSetup(unittest.TestCase):
         self.db.sql.assert_not_called()
 
 
+class TestCalendarReschedule(unittest.TestCase):
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.object(api, "_", side_effect=lambda text: text))
+        self.stack.enter_context(patch.object(frappe, "throw", side_effect=frappe.ValidationError))
+        self.stack.enter_context(patch.object(api, "now_datetime", return_value=frappe.utils.get_datetime("2026-10-27 09:00:00")))
+        self.doc = Mock(doctype="Patient Encounter", flags=frappe._dict())
+        self.doc.name = "test-encounter"
+        self.doc.get.side_effect = {"pe_appointment_date": "2026-10-28", "docstatus": 0}.get
+        self.doc.meta.has_field.return_value = True
+
+    def test_reschedule_updates_canonical_date_and_read_only_field(self):
+        self.assertEqual(api._reschedule(self.doc, "2026-10-30", "2026-10-28"), "2026-10-28")
+        self.assertEqual(str(self.doc.pe_appointment_date), "2026-10-30")
+        self.doc.set.assert_called_once_with(api.RESCHEDULE_DATE_FIELD, frappe.utils.getdate("2026-10-30"))
+        self.doc.save.assert_called_once_with(ignore_permissions=True)
+        api.protect_reschedule_date(self.doc)
+        self.assertEqual(self.doc.set.call_count, 1)
+
+    def test_invalid_or_stale_date_does_not_save(self):
+        for date, expected in [(None, "2026-10-28"), ("2026-10-26", "2026-10-28"), ("2026-10-27", "2026-10-28"),
+                               ("2026-10-28", "2026-10-28"), ("2026-10-30", "2026-10-29")]:
+            with self.subTest(date=date, expected=expected), self.assertRaises(frappe.ValidationError):
+                api._reschedule(self.doc, date, expected)
+        self.doc.save.assert_not_called()
+
+    def test_form_api_cannot_change_reschedule_date(self):
+        self.doc.is_new.return_value = False
+        with patch.object(frappe, "db", Mock(), create=True) as db:
+            db.get_value.return_value = "2026-10-30"
+            api.protect_reschedule_date(self.doc)
+        self.doc.set.assert_called_once_with(api.RESCHEDULE_DATE_FIELD, "2026-10-30")
+
+    def test_new_encounter_cannot_supply_reschedule_date(self):
+        self.doc.is_new.return_value = True
+        api.protect_reschedule_date(self.doc)
+        self.doc.set.assert_called_once_with(api.RESCHEDULE_DATE_FIELD, None)
+
+    def test_reschedule_requires_responsible_staff_and_open_appointment(self):
+        with patch.object(api, "_agent", return_value="agent@example.com"):
+            for status in ("Pending", "Approved", "Checked In", "Completed", "Cancelled"):
+                workflow = frappe._dict(workflow_status=status)
+                actions = api._actions(self.doc, workflow, ("agent@example.com", {"Agent"}, False))
+                self.assertEqual("reschedule" in actions, status in ("Pending", "Approved"))
+                self.assertNotIn("reschedule", api._actions(self.doc, workflow, ("other", {"Agent"}, False)))
+                self.assertNotIn("reschedule", api._actions(self.doc, workflow, ("reception", {"Appointment Receptionist"}, False)))
+
+    def test_future_actions_are_reschedule_only_for_both_sources(self):
+        for doctype, field in [("Patient Encounter", "pe_appointment_date"), ("Mobile App Appointment", "appointment_date")]:
+            doc = frappe._dict(doctype=doctype, docstatus=0, **{field: "2026-10-28"})
+            with patch.object(api, "_agent", return_value="agent"):
+                for status in ("Pending", "Approved", "Checked In", "Completed", "Cancelled"):
+                    workflow = frappe._dict(workflow_status=status)
+                    self.assertEqual(api._actions(doc, workflow, ("Administrator", {"System Manager"}, True)),
+                                     ["reschedule"] if status in ("Pending", "Approved") else [])
+                    self.assertEqual(api._actions(doc, workflow, ("reception", {"Appointment Receptionist"}, False)), [])
+            with self.assertRaises(frappe.ValidationError):
+                api._require_current_or_past(doc)
+
+    def test_today_and_past_preserve_status_actions(self):
+        for date in ("2026-10-27", "2026-10-26"):
+            doc = frappe._dict(doctype="Patient Encounter", pe_appointment_date=date, sr_encounter_place="Online", docstatus=0)
+            with patch.object(api, "_agent", return_value="agent"):
+                context = ("Administrator", {"System Manager", "Appointment Receptionist"}, True)
+                self.assertIn("approve", api._actions(doc, frappe._dict(workflow_status="Pending"), context))
+                self.assertIn("check_in", api._actions(doc, frappe._dict(workflow_status="Approved"), context))
+                self.assertIn("complete", api._actions(doc, frappe._dict(workflow_status="Checked In"), context))
+                self.assertIn("cancel", api._actions(doc, frappe._dict(workflow_status="Pending"), context))
+                api._require_current_or_past(doc)
+
+
+class TestClinicStatusNormalization(unittest.TestCase):
+    def test_known_options_are_normalized_without_changing_other_fields(self):
+        for value, expected in [("draft", "Draft"), (" confirmed ", "Confirmed"),
+                                ("CHECKED IN", "Checked In"), ("Draft", "Draft")]:
+            doc = Mock()
+            doc.meta.get_field.return_value = frappe._dict(fieldtype="Select", options="Draft\nConfirmed\nChecked In")
+            doc.get.return_value = value
+            api.normalize_clinic_appointment_status(doc)
+            doc.set.assert_called_once_with("appointment_status", expected)
+
+    def test_unknown_empty_and_missing_options_remain_for_standard_validation(self):
+        for value in ("Unknown", "", None):
+            doc = Mock()
+            doc.meta.get_field.return_value = frappe._dict(fieldtype="Select", options="Draft")
+            doc.get.return_value = value
+            api.normalize_clinic_appointment_status(doc)
+            doc.set.assert_not_called()
+        doc.meta.get_field.return_value = None
+        api.normalize_clinic_appointment_status(doc)
+        doc.set.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

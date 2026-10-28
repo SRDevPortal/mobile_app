@@ -21,7 +21,7 @@ def setup_encounter_status():
         return
     from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
     from mobile_app.api.appointment_calendar import (
-        APPOINTMENT_STATUS_FIELD, WORKFLOW,
+        APPOINTMENT_STATUS_FIELD, RESCHEDULE_DATE_FIELD, WORKFLOW,
     )
 
     create_custom_fields({"Patient Encounter": [{
@@ -31,6 +31,12 @@ def setup_encounter_status():
         "no_copy": 1, "in_standard_filter": 1,
         "depends_on": "eval:doc.sr_encounter_type == 'Appointment'",
         "description": "Independent Mobile App appointment workflow. Updated by authorized staff.",
+    }, {
+        "fieldname": RESCHEDULE_DATE_FIELD, "label": "Reschedule Date",
+        "fieldtype": "Date", "insert_after": "pe_appointment_date",
+        "read_only": 1, "allow_on_submit": 1, "no_copy": 1,
+        "depends_on": "eval:doc.sr_encounter_type == 'Appointment'",
+        "description": "Last date selected using Reschedule in the Mobile App Appointment Calendar.",
     }]})
     if not frappe.db.exists("DocType", WORKFLOW):
         return

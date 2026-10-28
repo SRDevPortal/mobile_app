@@ -191,6 +191,15 @@ def _visit_data(doc, doctors=None, clinics=None, workflows=None):
     from mobile_app.api import appointment_calendar as cal
     workflow = (workflows.get(cal._key(doc.source_doctype, doc.source_name), {}) if workflows is not None else cal._workflow(doc.source_doctype, doc.source_name)) if doc.source_doctype else {}
     result['appointment_status'] = cal._status(None, workflow) if doc.source_doctype else None
+    # Match reception checkout eligibility, including appointments completed elsewhere.
+    if doc.get('checkout_completed_at') or result['appointment_status'] == 'Completed':
+        result['checkout_status'] = 'Checked out'
+    elif doc.status == 'Withdrawn':
+        result['checkout_status'] = 'Not applicable'
+    elif _checkout_ready(doc):
+        result['checkout_status'] = 'Awaiting checkout'
+    else:
+        result['checkout_status'] = 'Not ready'
     result['can_complete_appointment'] = bool(_roles() & cal.RECEPTION_ROLES) and bool(
         doc.source_doctype and result['appointment_status'] == 'Checked In' and
         doc.status == 'Completed' and doc.stages and all(s.state == 'Completed' for s in doc.stages))
@@ -290,6 +299,8 @@ def branch_details(clinic):
 def assign_appointment_branch(clinic,request_id,doctype,name,reason):
     _require_reception();_reason(reason)
     source=_canonical(doctype,name)
+    from mobile_app.api.appointment_calendar import _require_current_or_past
+    _require_current_or_past(source)
     previous=appointment_branch(source.doctype,source.name)
     if previous:_access(previous)
     if find_visit(source.doctype,source.name): frappe.throw('This appointment already has an OPD visit. Finish or withdraw it before arranging a new branch visit.')
@@ -555,6 +566,7 @@ def check_in(clinic, request_id, department=None, doctor=None, patient=None, pat
     if not source and patient:
         source = _walkin_appointment(patient, doctor, clinic)
     if source:
+        cal._require_current_or_past(source)
         assigned_branch=appointment_branch(source.doctype,source.name)
         if assigned_branch and assigned_branch!=clinic: frappe.throw('This appointment belongs to another branch. Select its branch or reassign the appointment first.')
         if not cal._can_read(source, cal._workflow(source.doctype, source.name), cal._context()): frappe.throw('Appointment access denied.', frappe.PermissionError)
@@ -1032,7 +1044,9 @@ def patient_overview(clinic,visit):
     if captured and getdate(captured['recorded_at'])==getdate():
         values=captured['values'];labels={'systolic':'Blood Pressure (systolic)','diastolic':'Blood Pressure (diastolic)','pulse':'Heart Rate / Pulse','spo2':'SpO2'}
         vitals={'fields':[{'label':labels.get(k,next((o['label'] for o in captured['options'] if o['id']==k),k)),'value':v} for k,v in values.items()]}
-    return {'visit':_visit_data(current),'patient':patient,'vitals':vitals,'room_vitals':captured}
+    rooms = [_get('Room', name, clinic) for name in {stage.room for stage in current.stages}]
+    return {'visit':_visit_data(current),'patient':patient,'vitals':vitals,'room_vitals':captured,
+            'rooms':[{'name':room.name,'room_number':room.room_number} for room in rooms]}
 
 
 @frappe.whitelist()
@@ -1182,3 +1196,168 @@ def complete_appointment(clinic, request_id, visit, expected_version):
     workflow.add_comment('Comment', text='Checked In → Completed')
     _save(current)
     return _visit_data(current)
+
+
+CHECKOUT_SECTIONS = {
+    "notes": ("Clinical Notes", {"sr_notes", "notes", "sr_complaints", "sr_observations", "sr_investigations", "sr_diagnosis", "diagnosis", "symptoms", "treatment_plan", "follow_up_date"}),
+    "diet": ("Diet Charts", {"diet_chart"}),
+    "prescription": ("All Medications", {"drug_prescription", "sr_homeopathy_drug_prescription", "sr_allopathy_drug_prescription"}),
+}
+
+
+def _checkout_access():
+    if not (_branch_admin() or _roles().intersection({"Appointment Receptionist", "OPD Staff"})):
+        frappe.throw("Reception access is required for Check Out.", frappe.PermissionError)
+
+
+def _checkout_ready(visit):
+    return visit.status == "Completed" and bool(visit.stages) and all(s.state == "Completed" for s in visit.stages)
+
+
+def _checkout_encounter(visit):
+    name = visit.get("encounter") or (visit.source_name if visit.source_doctype == "Patient Encounter" else None)
+    if not name and visit.source_doctype == "Mobile App Appointment":
+        name = _value("Mobile App Appointment", visit.source_name, "patient_encounter")
+    if not name:
+        frappe.throw("This visit has no linked Patient Encounter. Link the clinical encounter before checkout.")
+    doc = _doc("Patient Encounter", name)
+    if doc.patient != visit.patient or doc.docstatus == 2:
+        frappe.throw("The linked encounter is not available for this patient.")
+    doc.check_permission("read")
+    return doc
+
+
+def _checkout_documents(doc):
+    from copy import deepcopy
+    record = _viewer_record(deepcopy(doc), set().union(*(fields for label, fields in CHECKOUT_SECTIONS.values())))
+    documents = [{"id": key, "label": label, "fields": rows}
+                 for key, (label, names) in CHECKOUT_SECTIONS.items()
+                 if (rows := [f for f in record["fields"] if f["fieldname"] in names and f["value"]])]
+    diet = next((item for item in documents if item["id"] == "diet"), None)
+    if diet and doc.get("diet_chart"):
+        chart = frappe.get_doc("Diet Chart", doc.diet_chart)
+        diet["fields"] = _viewer_record(chart, {"diet_chart_name", "instructions", "allowed_foods", "restricted_foods"})["fields"]
+    return documents
+
+
+@frappe.whitelist()
+def checkout_list(clinic):
+    _access(clinic); _checkout_access()
+    visits = [v for v in store.records("Visit", {"clinic": clinic, "status": "Completed"})
+              if _checkout_ready(v) and not v.get("checkout_completed_at")]
+    # Already completed appointments do not need a second reception checkout.
+    rows = [v for v in _visit_rows(visits) if v.get("appointment_status") != "Completed"]
+    return {"visits": sorted(rows, key=lambda v: (str(v["visit_date"]), v["token"])),
+            "rooms": [{"name": room.name, "room_number": room.room_number}
+                      for room in store.records("Room", {"clinic": clinic})]}
+
+
+@frappe.whitelist()
+def checkout_details(clinic, visit):
+    _access(clinic); _checkout_access()
+    current = _get("Visit", visit, clinic)
+    if not _checkout_ready(current):
+        frappe.throw("Finish all required OPD steps before checkout.")
+    doc = _checkout_encounter(current)
+    modified = str(doc.modified)
+    checked = current.get("checkout_checklist") or []
+    if current.get("checkout_encounter_modified") != modified:
+        checked = []
+    return {"visit": _visit_data(current), "encounter": doc.name, "modified": modified,
+            "modified_by": doc.modified_by, "documents": _checkout_documents(doc),
+            "checked": checked, "completed_at": current.get("checkout_completed_at")}
+
+
+@frappe.whitelist(methods=["POST"])
+@_mutation
+def save_checkout(clinic, request_id, visit, expected_version, encounter_modified, checked, complete=0):
+    _checkout_access()
+    current = _get("Visit", visit, clinic); _version(current, expected_version)
+    if not _checkout_ready(current) or current.get("checkout_completed_at"):
+        frappe.throw("This visit is not awaiting checkout. Refresh the list.")
+    doc = _checkout_encounter(current)
+    if str(doc.modified) != str(encounter_modified):
+        frappe.throw("The doctor updated this encounter. Reopen checkout and review the latest documents.", frappe.TimestampMismatchError)
+    checked = _json(checked, list)
+    allowed = {item["id"] for item in _checkout_documents(doc)}
+    if any(not isinstance(key, str) or key not in allowed for key in checked):
+        frappe.throw("Invalid checkout checklist.")
+    current.checkout_checklist = sorted(set(checked))
+    current.checkout_encounter_modified = str(doc.modified)
+    current.checkout_reviewed_by = frappe.session.user
+    current.checkout_reviewed_at = now_datetime()
+    if cint(complete):
+        if doc.docstatus == 0:
+            doc.check_permission("submit")
+            doc.submit()
+        from mobile_app.api import appointment_calendar as cal
+        if current.source_doctype:
+            source = cal._source(current.source_doctype, current.source_name, lock=True)
+            state = cal._workflow(source.doctype, source.name)
+            if cal._status(source, state) != "Checked In":
+                frappe.throw("The appointment must be Checked In before checkout.", frappe.TimestampMismatchError)
+            workflow = frappe.get_doc(cal.WORKFLOW, state.name)
+            workflow.workflow_status = "Completed"
+            workflow.checked_out_at = now_datetime(); workflow.completed_by = frappe.session.user
+            workflow.save(ignore_permissions=True)
+            cal._sync_encounter_status(source, "Completed")
+            workflow.add_comment("Comment", text="Reception completed checkout. Selected print sections were recorded; printing and handover are not certified.")
+        current.checkout_completed_at = now_datetime()
+        current.checkout_completed_by = frappe.session.user
+    _save(current)
+    return {"visit": current.name, "completed": bool(current.get("checkout_completed_at"))}
+
+
+@frappe.whitelist()
+def checkout_print(clinic, visit, sections, encounter_modified):
+    """Render the site's encounter format with only the selected checkout sections."""
+    from copy import deepcopy
+    _access(clinic); _checkout_access()
+    current = _get("Visit", visit, clinic)
+    if not _checkout_ready(current):
+        frappe.throw("Finish all required OPD steps before checkout.")
+    doc = _checkout_encounter(current)
+    doc.check_permission("print")
+    if str(doc.modified) != str(encounter_modified):
+        frappe.throw("The encounter changed. Reopen checkout before printing.", frappe.TimestampMismatchError)
+    selected = _json(sections, list)
+    available = {item["id"] for item in _checkout_documents(doc)}
+    if not selected or any(not isinstance(key, str) or key not in available for key in selected):
+        frappe.throw("Select available encounter sections to print.")
+    printable = deepcopy(doc)
+    printable.apply_fieldlevel_read_permissions()
+    for key, (label, fields) in CHECKOUT_SECTIONS.items():
+        if key not in selected:
+            for field in fields:
+                if printable.meta.has_field(field):
+                    printable.set(field, [] if printable.meta.get_field(field).fieldtype in ("Table", "Table MultiSelect") else None)
+    # The encounter template requires a practitioner label to render each table.
+    # Keep recorded medicines visible even when a historical name snapshot is missing.
+    if "prescription" in selected:
+        for table, prefix in (("drug_prescription", "sr_ayurvedic_practitioner"),
+                              ("sr_homeopathy_drug_prescription", "sr_homeopathy_practitioner"),
+                              ("sr_allopathy_drug_prescription", "sr_allopathy_practitioner")):
+            if printable.get(table) and not printable.get(prefix + "_name"):
+                printable.set(prefix + "_name", printable.get(prefix) or "Practitioner not recorded")
+    format_name = doc.meta.default_print_format or "Standard"
+    html = frappe.get_print(doc.doctype, doc.name, print_format=format_name, doc=printable)
+    return {"html": _checkout_appointment_dates_only(html), "print_format": format_name}
+
+
+def _checkout_appointment_dates_only(html):
+    """Remove encounter timestamps from checkout output, preserving appointment dates."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    for label in list(soup.select(".pt-label")):
+        if label.get_text(" ", strip=True).casefold() not in {
+            "encounter date & time", "encounter date and time", "encounter date", "encounter time"
+        }:
+            continue
+        row = label.find_parent("tr")
+        if row is None:
+            continue
+        value_row = row.find_next_sibling("tr")
+        if value_row and value_row.select_one(".pt-value") and not value_row.select_one(".pt-label"):
+            value_row.decompose()
+        row.decompose()
+    return str(soup)

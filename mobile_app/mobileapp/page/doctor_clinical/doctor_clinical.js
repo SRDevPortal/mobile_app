@@ -87,10 +87,10 @@
         render() {
             this.$root = $(`<div class="ac-shell">
                 <nav class="ac-rail" aria-label="Clinic navigation">
-                    <span class="ac-brand" title="Clinic Calendar">${icon("calendar")}</span>
-                    <button class="ac-rail-link active" data-action="calendar" aria-label="Appointment calendar" title="Appointment calendar" aria-current="page">${icon("calendar")}</button>
-                    <button class="ac-rail-link" data-action="encounters" aria-label="Patient Encounter (opens in a new tab)" title="Patient Encounter (opens in a new tab)">${clinicIcon("encounters")}</button>
-                    <button class="ac-rail-link" data-action="doctors" aria-label="Doctors" title="Doctors">${clinicIcon("doctors")}</button>
+                    <button class="ac-rail-link ac-online-menu" data-action="display" aria-label="Waiting-Room Display (opens in a new tab)" title="Waiting-Room Display (opens in a new tab)"><svg class="ac-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M12 17v4M8 21h8"/></svg><small>Display</small></button>
+                    <button class="ac-rail-link ac-online-menu active" data-action="calendar" aria-label="Appointment calendar" title="Appointment calendar" aria-current="page">${icon("calendar")}<small>Calendar</small></button>
+                    <button class="ac-rail-link ac-online-menu" data-action="encounters" aria-label="Patient Encounter (opens in a new tab)" title="Patient Encounter (opens in a new tab)">${clinicIcon("encounters")}<small>Patient En.</small></button>
+                    <button class="ac-rail-link ac-online-menu" data-action="doctors" aria-label="Doctors" title="Doctors">${clinicIcon("doctors")}<small>Doctors</small></button>
                 <button class="ac-rail-link ac-online-menu" data-action="online" aria-label="Online appointments" title="Online appointments"><svg class="ac-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="12" height="12" rx="2"/><path d="m15 10 6-4v12l-6-4z"/></svg><small>Online</small></button>
                 <button class="ac-rail-link ac-online-menu" data-action="opd" aria-label="OPD tokens and rooms" title="OPD tokens and rooms"><svg class="ac-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v5a4 4 0 0 0 8 0V3M6 3h2m4 0h2M10 12v3a5 5 0 0 0 10 0v-2"/><circle cx="20" cy="10" r="2"/></svg><small>OPD</small></button>
                     <button class="ac-rail-link" data-action="settings" aria-label="Settings" title="Settings" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:10px;flex-shrink:0"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m9 3-.6 2.2-2 .9-2-.7-2 3.4 1.5 1.6-.2 2.2L2 14l2 3.4 2.1-.5 1.8 1.3.4 2.3h4l.6-2.2 2-.9 2 .7 2-3.4-1.5-1.6.2-2.2 1.7-1.4-2-3.4-2.1.5-1.8-1.3L13 3Z"/><circle cx="11" cy="12" r="3"/></svg><span>Settings</span></button>
@@ -671,8 +671,8 @@
             const stamp = value => value ? moment(value).format("D MMM, h:mm A") : "";
             // Keep historical consultation audit in the database, not the simplified appointment panel.
             const history = (r.history || []).filter(h => !/Checked In \u2192 In Consultation|In Consultation \u2192 Completed/.test($('<div>').html(h.content).text()));
-            const meet = /^https:\/\/meet\.google\.com\//i.test(r.meet_link || "") ? `<a class="ac-btn" target="_blank" rel="noopener noreferrer" href="${esc(r.meet_link)}">Join video consultation</a>` : "";
-            const changeDoctorButton = r.can_change_doctor && r.status === "Pending" ? this.button("change-doctor", "Change doctor") : "";
+            const meet = !r.is_future && /^https:\/\/meet\.google\.com\//i.test(r.meet_link || "") ? `<a class="ac-btn" target="_blank" rel="noopener noreferrer" href="${esc(r.meet_link)}">Join video consultation</a>` : "";
+            const changeDoctorButton = r.online && (r.can_change_doctor || r.is_future) && r.status === "Pending" ? this.button("change-doctor", "Change doctor", "", r.is_future ? 'disabled aria-disabled="true" title="Available on the appointment date"' : "") : "";
             const sourceButton = r.can_open_source ? this.button("source", r.encounter ? "Open Patient Encounter" : "Open booking record", "ac-open-source") : "";
             const statusActions = r.online ? `<div class="ac-status-actions"><span class="ac-action-title">UPDATE STATUS</span>${[
                 ["approve", "Approve"], ["check_in", "Check In"], ["complete", r.status === "Completed" ? "Completed" : "Complete"], ["cancel", "Cancel Apt."]
@@ -681,7 +681,7 @@
                 <div class="ac-patient-heading"><span class="ac-eyebrow">APPOINTMENT DETAILS</span><h2>${esc(r.patient_name)}</h2><p>${esc(moment(r.date).format("dddd, D MMMM"))} &middot; ${esc(moment(r.time,"HH:mm:ss").format("h:mm A"))}</p></div>
                 <div class="ac-detail-scroll"><dl>${field("OPD token",r.opd_visit ? String(r.opd_visit.token_number).padStart(3,"0") : "")}${field("Branch",r.clinic_name)}${field("Doctor",r.doctor_name)}${field("Appointment mode",r.online ? "Online" : "In clinic")}${field("Phone",r.phone)}${field("Email",r.email)}${field("Patient",r.patient)}${field("Booking",r.name)}${field("Assigned agent",r.assigned_agent || "Unassigned")}${field("Encounter",r.encounter)}${field("Notes",r.notes)}${field("Decision reason",r.reason)}${field("Decision by",r.decision_by)}${field("Decision time",stamp(r.decision_at))}${field("Checked in",stamp(r.checked_in_at))}${field("Completed",stamp(r.completed_at))}${field("Completed by",r.completed_by)}</dl>
                 ${history.length ? `<details class="ac-history"><summary>Activity history</summary>${history.map(h => `<div><small>${esc(stamp(h.creation))} | ${esc(h.comment_by)}</small><p>${esc($('<div>').html(h.content).text())}</p></div>`).join("")}</details>` : ""}</div>
-                <div class="ac-detail-actions">${statusActions}${!r.online&&!r.opd_visit&&this.canOPD?this.button("branch","Set branch"):""}${!r.online ? changeDoctorButton : ""}${r.actions.filter(a => !r.online && !["claim", "assign"].includes(a)).map(a => this.button(a,labels[a],a === "cancel" ? "ac-danger" : "ac-primary")).join("")}${meet}${!r.online ? sourceButton : ""}${!r.actions.length && !["Checked In","Completed","Cancelled"].includes(r.status) ? '<p class="ac-muted">Actions are available to the responsible agent or assigned doctor.</p>' : ""}</div>`);
+                <div class="ac-detail-actions">${statusActions}${r.actions.includes("reschedule") ? this.button("reschedule", "Reschedule") : ""}${!r.is_future&&!r.online&&!r.opd_visit&&this.canOPD?this.button("branch","Set branch"):""}${!r.online ? changeDoctorButton : ""}${r.actions.filter(a => !r.online && !["claim", "assign", "reschedule"].includes(a)).map(a => this.button(a,labels[a],a === "cancel" ? "ac-danger" : "ac-primary")).join("")}${meet}${!r.online ? sourceButton : ""}${!r.actions.length && !["Checked In","Completed","Cancelled"].includes(r.status) ? '<p class="ac-muted">Actions are available to the responsible agent or assigned doctor.</p>' : ""}</div>`);
             if(this.section==='online') {
                 const $detail=this.$root.find('.ac-detail-view');
                 const doctor=this.doctors.find(d=>d.id===r.doctor_id) || {name:r.doctor_name};
@@ -693,6 +693,10 @@
         }
         close() {this.$root.removeClass('ac-drawer-open');this.$root.find('.ac-drawer-backdrop').remove();this.$root.find('.ac-detail-view').removeAttr('role aria-modal aria-label tabindex');if(this.drawerReturnFocus?.isConnected)this.drawerReturnFocus.focus();this.drawerReturnFocus=null;this.selected = null; ++this.detailRequest; this.$root.find(".ac-detail-view").prop("hidden",true);this.$root.find(".ac-queue-view").prop("hidden",false);this.renderQueue();}
         action(action, button) {
+            if (action === "display") {
+                const clinic = this.opd?.clinic || this.branchFilter || new URLSearchParams(location.search).get("clinic");
+                return window.open("/app/opd-display" + (clinic ? "?clinic=" + encodeURIComponent(clinic) : ""), "_blank", "noopener,noreferrer");
+            }
             if(action==='branch'&&this.selected){
                 const appointment=this.selected;
                 frappe.xcall('mobile_app.api.opd_queue.bootstrap').then(boot=>frappe.prompt([
@@ -741,9 +745,15 @@
             if (action === "new") return frappe.new_doc("Patient Encounter",{sr_encounter_type:"Appointment",pe_appointment_date:this.date.format("YYYY-MM-DD")});
             if (action === "source") {
                 this.calendarScroll = this.$cal.find(".fc-time-grid-container").scrollTop() ?? this.calendarScroll;
-                return frappe.set_route("Form", this.selected.encounter ? "Patient Encounter" : this.selected.source_doctype, this.selected.encounter || this.selected.name);
+                const doctype = this.selected.encounter ? "Patient Encounter" : this.selected.source_doctype;
+                const name = this.selected.encounter || this.selected.name;
+                return window.open(`/app/${frappe.router.slug(doctype)}/${encodeURIComponent(name)}`, "_blank", "noopener,noreferrer");
             }
             if (!this.selected || this.mutating || button?.prop("disabled")) return;
+            if (action === "reschedule") return frappe.prompt([
+                {fieldname:"reschedule_date",label:"Reschedule date",fieldtype:"Date",reqd:1,default:this.selected.date,
+                    description:"The appointment time stays unchanged."}
+            ], values => this.update(action,{...values,expected_date:this.selected.date}),"Reschedule appointment","Reschedule");
             if (action === "cancel") return frappe.prompt([{fieldname:"reason",label:"Reason for cancellation",fieldtype:"Small Text",reqd:1}],values => this.update(action,values),"Cancel appointment","Cancel appointment");
             if (action === "assign") return frappe.prompt([{fieldname:"agent",label:"Responsible agent",fieldtype:"Link",options:"User",reqd:1,get_query:()=>({query:`${API}.agent_query`})}],values=>this.update(action,values),"Assign appointment","Assign");
             this.update(action);
@@ -861,7 +871,7 @@
                     <section class="dd-about"><h3>Disease list</h3><p>Create the diseases available for selection in each doctor's profile.</p>
                     ${this.diseaseCatalogue.can_manage?'<label for="mobile-disease-name">Disease name</label><input id="mobile-disease-name" class="form-control" maxlength="140" placeholder="Enter a disease name">'+button('disease-add','Add disease'):''}
                     <div role="list">${this.diseaseCatalogue.names.map((name,index)=>`<div role="listitem" style="display:flex;align-items:center;gap:12px;margin-top:12px"><span style="flex:1">${esc(name)}</span>${this.diseaseCatalogue.can_manage?`<button class="ac-btn" data-setting="disease-rename" data-index="${index}">Rename</button><button class="ac-btn" data-setting="disease-delete" data-index="${index}">Delete</button>`:''}</div>`).join('')||'<p>No diseases yet. Add the first disease above.</p>'}</div></section>
-                    ${boot.branch_admin?`<section class="dd-about"><h3>Branches</h3><label>Branch <select class="form-control" data-settings-branch>${boot.clinics.map(c=>`<option value="${esc(c.name)}" ${c.name===selected?'selected':''}>${esc(c.clinic_name)}</option>`).join('')}</select></label><div>${button('add-branch','Add branch')}${button('manage-branches','Manage branches')}${button('edit-branch','Branch settings')}</div></section>
+                    ${boot.branch_admin?`<section class="dd-about"><h3>Branches</h3><label>Branch <select class="form-control" data-settings-branch>${boot.clinics.map(c=>`<option value="${esc(c.name)}" ${c.name===selected?'selected':''}>${esc(c.clinic_name)}</option>`).join('')}</select></label><div>${button('add-branch','Add branch')}${button('manage-branches','Manage branches')}${button('edit-branch','Branch settings')}${button('branch-summary','Branch summary')}</div></section>
                     <section class="dd-about"><h3>Token WhatsApp</h3><p>Configure token notifications for the branch selected above.</p>${button('token-whatsapp','Token WhatsApp settings')}</section>`:'<p>Branch and WhatsApp settings are available to branch administrators.</p>'}`);
             } catch(error) {
                 this.$settings.find('.ac-settings-content').html('<p role="alert">Unable to load settings. Reopen Settings to retry.</p>');

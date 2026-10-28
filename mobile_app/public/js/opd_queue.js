@@ -156,7 +156,7 @@ frappe.provide('mobile_app');
                 const url=new URL(location.href);url.searchParams.set('clinic',this.clinic);history.replaceState(null,'',url);
                 this.shell();await this.refresh();
             });
-            this.$root.on('change','[data-opd-date]',event=>{this.queueHistory=true;this.queueOffset=0;this.queueDate=event.target.value||frappe.datetime.get_today();this.refresh();});
+            this.$root.on('change','[data-opd-date]',event=>{this.queueOffset=0;this.queueDate=event.target.value||frappe.datetime.get_today();this.refresh();});
             this.$root.on('input change','[data-queue-filter]',event=>{
                 this.queueSearch=this.$root.find('[data-queue-filter="search"]').val()||'';
                 this.queueStatus=this.$root.find('[data-queue-filter="status"]').val()||'';
@@ -206,7 +206,7 @@ frappe.provide('mobile_app');
             }
             const title=this.display?'Please wait for your token to be called':'OPD Patient Flow';
             this.$root.html(`<header class="opd-head"><div><h1>${title}</h1>${this.display ? '' : `<p>${esc(this.boot.clinics.find(c=>c.name===this.clinic)?.clinic_name)}</p><label>Branch <select data-opd-branch aria-label="OPD branch">${this.boot.clinics.map(c=>`<option value="${esc(c.name)}" ${c.name===this.clinic?'selected':''}>${esc(c.clinic_name)}</option>`).join('')}</select></label>`}</div><div class="opd-actions"><span class="opd-connection"></span>${this.display?btn('sound','Enable sound')+btn('fullscreen','Full screen'):(this.host?.opdOnly?'':btn('calendar','Appointment calendar'))}${btn('refresh','Refresh')}</div></header>
-                ${this.display?'':`<nav class="opd-nav">${btn('queue','OPD Queue')}${btn('room','My OPD')}${this.boot.manager?btn('setup','OPD Setup'):''}${btn('tv','Waiting-Room Display')}${btn('branch-summary','Branch summary')}</nav>`}<div class="opd-content"><div class="opd-empty">Loading...</div></div>`);
+                ${this.display?'':`<nav class="opd-nav">${btn('queue','OPD Queue')}${btn('room','My OPD')}${this.boot.manager?btn('setup','OPD Setup'):''}${(appointmentOperator()||this.boot.branch_admin)?btn('checkout','Check Out'):''}</nav>`}<div class="opd-content"><div class="opd-empty">Loading...</div></div>`);
             this.$root.find(`[data-opd="${this.section}"]`).addClass('active');this.connection(!!frappe.realtime.socket?.connected);
         }
         async refresh(){
@@ -234,8 +234,10 @@ frappe.provide('mobile_app');
                     const result=await response.json();
                     if(result.exc||!result.message)throw new Error('Invalid display response');
                     data=result.message;
+                }else if(this.section==='checkout'){
+                    data=await read('checkout_list',{clinic:this.clinic});
                 }else if(this.section==='queue'){
-                    data=await read('queue_snapshot',{active_only:this.queueHistory?0:1,clinic:this.clinic,date:this.queueDate||frappe.datetime.get_today(),offset:this.queueOffset||0,search:this.queueSearch||'',status:this.queueStatus||''});
+                    data=await read('queue_snapshot',{active_only:0,clinic:this.clinic,date:this.queueDate||frappe.datetime.get_today(),offset:this.queueOffset||0,search:this.queueSearch||'',status:this.queueStatus||''});
                 }else data=await read(this.section==='setup'?'get_setup':'snapshot',{clinic:this.clinic});
                 if(scope!==[this.clinic,this.section,this.queueDate,this.queueOffset,this.queueSearch,this.queueStatus].join('|')){
                     this.refreshPending=true;return;
@@ -245,7 +247,7 @@ frappe.provide('mobile_app');
                 this.data=data;
                 if(data.daily){this.queueDate=data.daily.date;this.queueOffset=data.daily.offset;}
                 this.lastRefresh=Date.now();this.connection(!!frappe.realtime.socket?.connected);
-                if(this.display)this.renderTV();else if(this.section==='setup'){this.setup=structuredClone(data);this.dirty=false;this.renderSetup();}else if(this.section==='room')this.renderRoom();else this.renderQueue();
+                if(this.display)this.renderTV();else if(this.section==='setup'){this.setup=structuredClone(data);this.dirty=false;this.renderSetup();}else if(this.section==='room')this.renderRoom();else if(this.section==='checkout')this.renderCheckout();else this.renderQueue();
             }catch(e){
                 this.lastRefresh=null;this.connection(false);
                 if(serial===this.serial){
@@ -275,8 +277,8 @@ frappe.provide('mobile_app');
             const active=document.activeElement;
             const searchFocus=active?.matches('[data-queue-filter="search"]');
             const selection=searchFocus?[active.selectionStart,active.selectionEnd]:null;
-            const rows=d.visits.map(v=>{const s=v.stages[v.stage_index],status=v.status==='Active'?s.state:v.status;return `<tr data-queue-state="${esc(status)}" data-queue-search="${esc([v.token,v.patient_name,v.consultation_doctor_name||v.consultation_doctor,v.route_name,v.department].join(' ').toLowerCase())}"><td><strong>${esc(v.token)}</strong><small>${esc(v.visit_date)}</small></td><td>${esc(v.patient_name)}${v.priority?'<small class="opd-badge priority">Priority</small>':''}</td><td>${esc(v.route_name || v.department || '')}<small>${esc(v.consultation_doctor_name || v.consultation_doctor)}</small></td><td>${esc(s.stage)}<small>${esc(roomLabel(d.rooms,s.room))}</small></td><td><span class="opd-badge" data-state="${esc(status)}">${esc(status)}</span>${v.status==='Active'?`<small>${waitLabel(s.queued_at)} since queue entry</small>`:''}</td><td>${btn('visit','Open',`data-id="${esc(v.name)}"`)}${btn('print','Print token',`data-id="${esc(v.name)}"`)}${v.status==='Active'?btn('manage-visit','Manage visit',`data-id="${esc(v.name)}"`):''}</td></tr>`;}).join('');
-            this.$root.find('.opd-content').html(`<div class="opd-toolbar"><h2>Daily visits <span class="opd-count">${d.daily?.counts.Total ?? d.visits.length}</span></h2>${appointmentOperator()?btn('walkin','Check in walk-in','',true):''}${d.manager?btn('end-day','End day'):''}<div class="opd-queue-filters"><input type="date" data-opd-date aria-label="Visit date" value="${esc(this.queueDate)}"><input type="search" data-queue-filter="search" aria-label="Filter patients or tokens" placeholder="Filter patient or token..." value="${esc(this.queueSearch||'')}"><select data-queue-filter="status" aria-label="Filter queue status">${['','Waiting','Called','In Progress','On Hold','Completed','Withdrawn'].map(x=>`<option value="${esc(x)}" ${x===(this.queueStatus||'')?'selected':''}>${esc(x||'All statuses')}</option>`).join('')}</select></div></div><div class="opd-day-counts">${Object.entries(d.daily?.counts||{}).map(([label,count])=>`<div><small>${esc(label)}</small><strong>${count}</strong></div>`).join('')}</div>${d.daily?.previous_active?`<div class="opd-notice">${d.daily.previous_active} unfinished visits from earlier dates remain active in My OPD. Review them before ending the day.</div>`:''}<div class="opd-panel opd-scroll">${rows?`<table class="opd-table"><thead><tr><th>Token</th><th>Patient</th><th>Route / Doctor</th><th>Stage / OPD</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="opd-empty">No visits match this date and filters.</div>'}</div>`);
+            const rows=d.visits.map(v=>{const s=v.stages[v.stage_index],status=v.status==='Active'?s.state:v.status;return `<tr data-queue-state="${esc(status)}" data-queue-search="${esc([v.token,v.patient_name,v.consultation_doctor_name||v.consultation_doctor,v.route_name,v.department].join(' ').toLowerCase())}"><td><strong>${esc(v.token)}</strong><small>${esc(v.visit_date)}</small></td><td>${esc(v.patient_name)}${v.priority?'<small class="opd-badge priority">Priority</small>':''}</td><td>${esc(v.route_name || v.department || '')}<small>${esc(v.consultation_doctor_name || v.consultation_doctor)}</small></td><td>${esc(s.stage)}<small>${esc(roomLabel(d.rooms,s.room))}</small></td><td><span class="opd-badge" data-state="${esc(status)}">${esc(status)}</span>${v.status==='Active'?`<small>${waitLabel(s.queued_at)} since queue entry</small>`:''}</td><td><span class="opd-badge" data-state="${v.checkout_status==='Checked out'?'Completed':v.checkout_status==='Awaiting checkout'?'Waiting':''}">${esc(v.checkout_status||'Not ready')}</span></td><td>${btn('visit','Open',`data-id="${esc(v.name)}"`)}${btn('print','Print token',`data-id="${esc(v.name)}"`)}${v.status==='Active'?btn('manage-visit','Manage visit',`data-id="${esc(v.name)}"`):''}</td></tr>`;}).join('');
+            this.$root.find('.opd-content').html(`<div class="opd-toolbar"><h2>Daily visits <span class="opd-count">${d.daily?.counts.Total ?? d.visits.length}</span></h2>${appointmentOperator()?btn('walkin','Check in walk-in','',true):''}${d.manager?btn('end-day','End day'):''}<div class="opd-queue-filters"><input type="date" data-opd-date aria-label="Visit date" value="${esc(this.queueDate)}"><input type="search" data-queue-filter="search" aria-label="Filter patients or tokens" placeholder="Filter patient or token..." value="${esc(this.queueSearch||'')}"><select data-queue-filter="status" aria-label="Filter queue status">${['','Waiting','Called','In Progress','On Hold','Completed','Withdrawn'].map(x=>`<option value="${esc(x)}" ${x===(this.queueStatus||'')?'selected':''}>${esc(x||'All statuses')}</option>`).join('')}</select></div></div><div class="opd-day-counts">${Object.entries(d.daily?.counts||{}).map(([label,count])=>`<div><small>${esc(label)}</small><strong>${count}</strong></div>`).join('')}</div>${d.daily?.previous_active?`<div class="opd-notice">${d.daily.previous_active} unfinished visits from earlier dates remain active in My OPD. Review them before ending the day.</div>`:''}<div class="opd-panel opd-scroll">${rows?`<table class="opd-table"><thead><tr><th>Token</th><th>Patient</th><th>Route / Doctor</th><th>Stage / OPD</th><th>Status</th><th>Checkout</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="opd-empty">No visits match this date and filters.</div>'}</div>`);
             if(d.daily)this.$root.find('.opd-content').append(`<div class="opd-toolbar">${btn('queue-prev','Previous',d.daily.offset ? '' : 'disabled')}<span>Page ${Math.floor(d.daily.offset/d.daily.page_length)+1}</span>${btn('queue-next','Next',d.daily.has_more ? '' : 'disabled')}</div>`);
             if(searchFocus){const input=this.$root.find('[data-queue-filter="search"]')[0];input?.focus();if(selection)input?.setSelectionRange(...selection);}
         }
@@ -427,9 +429,87 @@ frappe.provide('mobile_app');
                 try{await this.mutate('apply_routes',{expected_version:preview.config_version,patients:eligible.map(p=>({visit:p.visit,revision:p.revision})),reason:values.reason});d.hide();frappe.show_alert({message:'Waiting-patient routes updated',indicator:'green'});}finally{d.enable_primary_action();}
             }});d.fields_dict.preview.$wrapper.html(`<table class="opd-table"><thead><tr><th>Token</th><th>Patient</th><th>New rooms</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table>`);d.show();if(!eligible.length)d.disable_primary_action();
         }
-        async openVisit(id){
-            const data=await read('patient_overview',{clinic:this.clinic,visit:id});
-            const visit=data.visit,clinic=this.clinic,current=visit.stages[visit.stage_index];
+        renderCheckout(){
+            const visits=this.data.visits||[],rooms=this.data.rooms||[];
+            const rows=visits.map(v=>{
+                const stage=v.stages[v.stage_index];
+                return `<tr><td><strong>${esc(v.token)}</strong><small>${esc(v.visit_date)}</small></td><td>${esc(v.patient_name)}${v.priority?'<small class="opd-badge priority">Priority</small>':''}</td><td>${esc(v.route_name||v.department||'')}<small>${esc(v.consultation_doctor_name||v.consultation_doctor||'')}</small></td><td>${esc(stage?.stage||'')}<small>${esc(stage?roomLabel(rooms,stage.room):'')}</small></td><td><span class="opd-badge" data-state="${esc(v.status)}">${esc(v.status)}</span><small>Awaiting checkout</small></td><td>${btn('checkout-patient','Review & Check Out',`data-id="${esc(v.name)}"`)}</td></tr>`;
+            }).join('');
+            this.$root.find('.opd-content').html(`<div class="opd-toolbar"><h2>Check Out <span class="opd-count">${visits.length}</span></h2><p>Patients who finished every room in their route and are awaiting reception checkout.</p></div><div class="opd-panel opd-scroll">${rows?`<table class="opd-table"><thead><tr><th>Token</th><th>Patient</th><th>Route / Doctor</th><th>Stage / OPD</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="opd-empty">No patients awaiting checkout.</div>'}</div>`);
+        }
+        async openCheckout(id){
+            return this.openVisit(id, true);
+        }
+        mountCheckout(dialog, area, footer, data, clinic, id){
+            const completeButton=$('<button type="button" class="btn btn-primary">Complete Check Out & Submit Encounter</button>').appendTo(footer);
+            area.html(`<header class="opd-checkout-heading"><strong>Current encounter: ${esc(data.encounter)}</strong><span>Last updated: ${esc(moment(data.modified).format("D MMM YYYY, h:mm A"))} by ${esc(data.modified_by)}</span></header><p class="opd-checkout-instruction">Select the details to preview, then click Print.</p><div class="opd-checkout-options">${data.documents.map(item=>`<section class="opd-checkout-option"><label><input type="checkbox" data-checkout-select="${esc(item.id)}" checked><span>${esc(item.label)}</span></label></section>`).join('')||'<p>No prescription, tests, care instructions or doctor notes are recorded in this encounter. Review the encounter before completing.</p>'}</div><p class="opd-checkout-completion-note">Complete Check Out submits the encounter and completes the appointment.</p>`);
+            dialog.$wrapper.addClass('opd-checkout-drawer');
+            const textValue=field=>esc(field?.type==='Text Editor'?new DOMParser().parseFromString(String(field.value||''),'text/html').body.textContent:String(field?.value??''));
+            const medicationTitles={drug_prescription:'Ayurvedic Medications',sr_homeopathy_drug_prescription:'Homeopathy Medications',sr_allopathy_drug_prescription:'Allopathy Medications'};
+            const fieldsHTML=fields=>fields.map(field=>{
+                if(field.type==='Table'||field.type==='Table MultiSelect'){
+                    const rows=field.value||[];
+                    const preferred=['sr_medication_name_print','drug_name','medication','drug_code','dosage','period','dosage_form','sr_drug_instruction','comment'];
+                    const columns=[...new Map(rows.flat().filter(f=>f.value!==null&&f.value!==''&&f.value!==0).map(f=>[f.fieldname,f])).values()];
+                    const ordered=medicationTitles[field.fieldname]?preferred.map(name=>columns.find(f=>f.fieldname===name)).filter(Boolean):columns;
+                    const nameColumn=ordered.find(f=>['sr_medication_name_print','drug_name','medication','drug_code'].includes(f.fieldname));
+                    const visible=ordered.filter(f=>!['sr_medication_name_print','drug_name','medication','drug_code'].includes(f.fieldname)||f===nameColumn);
+                    return `<section class="opd-encounter-table"><h4>${esc(medicationTitles[field.fieldname]||field.label)}</h4><div class="opd-scroll"><table class="opd-table"><thead><tr><th>No.</th>${visible.map(f=>`<th>${esc(f===nameColumn?'Medication':f.label)}</th>`).join('')}</tr></thead><tbody>${rows.map((row,i)=>`<tr><td>${i+1}</td>${visible.map(f=>`<td>${textValue(row.find(v=>v.fieldname===f.fieldname))}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;
+                }
+                return `<div class="opd-encounter-field"><label>${esc(field.label)}</label><div>${textValue(field)||'?'}</div></div>`;
+            }).join('');
+            const details=$('<section class="opd-encounter-details" aria-label="Read-only encounter details"></section>').insertAfter(area.find('.opd-checkout-heading'));
+            details.html(data.documents.map(item=>`<section class="opd-encounter-section"><h3>${esc(item.label)}</h3>${fieldsHTML(item.fields)}</section>`).join(''));
+            const missing=[['notes','Clinical Notes'],['diet','Diet Charts'],['prescription','All Medications']].filter(([id])=>!data.documents.some(item=>item.id===id));
+            if(missing.length)area.prepend(`<div class="opd-read-note">${missing.map(([,label])=>`<p><label><input type="checkbox" disabled> ${esc(label)} ? not recorded in this encounter</label></p>`).join('')}</div>`);
+            const preview=$('<section class="opd-checkout-preview"><h3>Print preview</h3><p role="status"></p><iframe title="Selected encounter details" sandbox="allow-same-origin allow-modals" hidden></iframe><button type="button" class="opd-btn" data-retry-preview hidden>Retry preview</button></section>').appendTo(area);
+            const frame=preview.find('iframe')[0];
+            const printButton=footer.find('.opd-drawer-print').text('Print').off('click').prop('disabled',true);
+            let previewSerial=0,ready=false;
+            const selectedSections=()=>area.find('[data-checkout-select]:checked').map((_,el)=>el.dataset.checkoutSelect).get();
+            const updatePreview=async()=>{
+                const serial=++previewSerial,sections=selectedSections();ready=false;printButton.prop('disabled',true);
+                frame.hidden=true;preview.find('[data-retry-preview]').prop('hidden',true);
+                preview.find('[role="status"]').text(sections.length?'Loading print preview...':'Select at least one section to preview and print.');
+                if(!sections.length)return;
+                try{
+                    const result=await read('checkout_print',{clinic,visit:id,sections,encounter_modified:data.modified});
+                    if(serial!==previewSerial)return;
+                    const html=new DOMParser().parseFromString(result.html,'text/html');
+                    html.querySelectorAll('script,.action-banner,.print-toolbar').forEach(node=>node.remove());
+                    frame.onload=async()=>{
+                        if(serial!==previewSerial)return;
+                        await frame.contentDocument?.fonts?.ready;
+                        if(serial!==previewSerial)return;
+                        ready=true;printButton.prop('disabled',false);preview.find('[role="status"]').text('');
+                    };
+                    frame.srcdoc='<!doctype html>'+html.documentElement.outerHTML;frame.hidden=false;
+                }catch(error){if(serial===previewSerial){preview.find('[role="status"]').text('Unable to load preview. Retry or reopen checkout if the encounter changed.');preview.find('[data-retry-preview]').prop('hidden',false);}}
+            };
+            area.on('change','[data-checkout-select]',updatePreview);
+            preview.on('click','[data-retry-preview]',updatePreview);
+            printButton.on('click',()=>{if(ready){frame.contentWindow.focus();frame.contentWindow.print();}});
+            dialog.$wrapper.on('hidden.bs.modal',()=>{previewSerial++;ready=false;frame.onload=null;});
+            updatePreview();
+            const save=async complete=>{
+                if(complete&&!await confirm('Submit this Patient Encounter and complete checkout? This can create clinical orders and billing records.'))return;
+                const checked=selectedSections();
+                completeButton.prop('disabled',true);area.find('button').prop('disabled',true);
+                try{
+                    await write('save_checkout',{clinic,visit:id,expected_version:data.visit.revision,encounter_modified:data.modified,checked,complete:complete?1:0});
+                    dialog.hide();await this.refresh();
+                    frappe.show_alert({message:complete?'Encounter submitted and checkout completed':'Checkout checklist saved',indicator:'green'});
+                }finally{completeButton.prop('disabled',!!data.completed_at);area.find('button').prop('disabled',false);}
+            };
+            completeButton.on('click',()=>save(true)).prop('disabled',!!data.completed_at);
+        }
+        async openVisit(id, checkout=false){
+            const clinic=this.clinic;
+            const [data, checkoutData]=await Promise.all([
+                read('patient_overview',{clinic,visit:id}),
+                checkout?read('checkout_details',{clinic,visit:id}):Promise.resolve(null)
+            ]);
+            const visit=data.visit,current=visit.stages[visit.stage_index],rooms=data.rooms||this.data.rooms||[];
             const renderFields=fields=>`<dl class="opd-read-fields">${fields.map(f=>{
                 let value=f.value;
                 if(f.type==='Table'||f.type==='Table MultiSelect')return `<div class="opd-read-wide"><dt>${esc(f.label)}</dt><dd>${value?.length?value.map((row,i)=>`<details><summary>Entry ${i+1}</summary>${renderFields(row)}</details>`).join(''):'--'}</dd></div>`;
@@ -450,25 +530,31 @@ frappe.provide('mobile_app');
             const $header=$(`<header class="opd-patient-banner"><div class="opd-patient-heading"><h2>${esc(visit.patient_name)}</h2><p>UHID: ${esc(visit.patient)}${sex?' &bull; '+esc(sex):''}${age!=null?' &bull; '+age+' Yrs':''}</p></div><span class="opd-badge opd-header-token">TOKEN ${esc(visit.token)}</span><button type="button" class="opd-drawer-close" aria-label="Close patient details">&times;</button></header>`);
             d.$wrapper.find('.modal-header').hide();d.$wrapper.find('.modal-content').prepend($header);
             $header.on('click','.opd-drawer-close',()=>d.hide());
-            $body.html(`<section class="opd-read-section"><div class="opd-visit-context"><div><small>Assigned OPD</small><strong>${esc(current.stage)} - ${esc(roomLabel(this.data.rooms,current.room))}</strong></div><div><small>Status</small><span class="opd-drawer-status">${esc(visit.status==='Active'?current.state:visit.status)}</span></div></div>
+            $body.html(`<section class="opd-read-section"><div class="opd-visit-context"><div><small>Assigned OPD</small><strong>${esc(current.stage)} - ${esc(roomLabel(rooms,current.room))}</strong></div><div><small>Status</small><span class="opd-drawer-status">${esc(visit.status==='Active'?current.state:visit.status)}</span></div></div>
                 <h4 class="opd-drawer-section-title">Appointment Info</h4><table class="opd-appointment-table"><tbody>${[
                     ['Room route',visit.route_name || visit.department],['Doctor',visit.consultation_doctor_name||visit.consultation_doctor],
                     ['Visit type',visit.source_doctype?'Appointment':'Walk-in'],['Appointment status',visit.appointment_status]
                 ].map(([label,value])=>`<tr><th scope="row">${esc(label)}</th><td>${esc(value||'--')}</td></tr>`).join('')}</tbody></table>
                 <h4 class="opd-drawer-section-title">Vitals Summary (Today)</h4><div class="opd-vitals-summary">${[['Blood Pressure',bp?bp+' mmHg':null],['Pulse',pulse?pulse+' bpm':null],['SpO2',spo2?spo2+'%':null]].concat((data.room_vitals?.options||[]).filter(o=>!['systolic','diastolic','pulse','spo2'].includes(o.id)&&data.room_vitals.values[o.id]!=null&&String(data.room_vitals.recorded_at).slice(0,10)===frappe.datetime.get_today()).map(o=>[o.label,String(data.room_vitals.values[o.id])+' '+o.unit])).map(([label,value])=>`<div><small>${label}</small><strong>${esc(value||'--')}</strong></div>`).join('')}</div>
                 </section>
-                <nav class="opd-patient-tabs" aria-label="Patient records">${[['invoice','Invoice'],['prescription','Prescription'],['history','Clinical history'],['dispatch','Dispatch details']].map(([key,label])=>`<button type="button" data-patient-tab="${key}">${label}</button>`).join('')}</nav><section class="opd-read-section opd-patient-records" aria-live="polite"></section>`);
+                <nav class="opd-patient-tabs" aria-label="Patient records">${[...(checkout?[['checkout','Check Out']]:[]),['invoice','Invoice'],['prescription','Prescription'],['history','Clinical history'],['dispatch','Dispatch details']].map(([key,label])=>`<button type="button" data-patient-tab="${key}">${label}</button>`).join('')}</nav><section class="opd-read-section opd-patient-records" aria-live="polite"></section>`);
             const $footer=$('<footer class="opd-drawer-footer"><button type="button" class="opd-drawer-dismiss">Close</button><button type="button" class="opd-drawer-print">Print Token Ticket</button></footer>');
             d.$wrapper.find('.modal-content').append($footer);
             $footer.on('click','.opd-drawer-dismiss',()=>d.hide());
-            $footer.on('click','.opd-drawer-print',()=>{d.hide();receipt(visit,this.data.rooms);});
-            if (visit.can_complete_appointment) {
-                const $complete=$('<button type="button" class="btn btn-primary">Complete Appointment</button>').appendTo($footer);
+            if(!checkout)$footer.on('click','.opd-drawer-print',()=>{d.hide();receipt(visit,rooms);});
+            if (checkout) {
+                $body.find('.opd-vitals-summary').prev('.opd-drawer-section-title').remove();
+                $body.find('.opd-vitals-summary').remove();
+                const openEncounter=$('<button type="button" class="opd-drawer-encounter">Open Encounter</button>');
+                openEncounter.insertBefore($footer.find('.opd-drawer-print'));
+                openEncounter.on('click',()=>window.open('/app/patient-encounter/'+encodeURIComponent(checkoutData.encounter),'_blank','noopener,noreferrer'));
+                const checkoutArea=$('<section class="opd-read-section opd-checkout-details"></section>').insertBefore($body.find('.opd-patient-records'));
+                this.mountCheckout(d,checkoutArea,$footer,checkoutData,clinic,id);
+            }
+            if (!checkout && visit.can_complete_appointment) {
+                const $complete=$('<button type="button" class="btn btn-primary">Review Check Out</button>').appendTo($footer);
                 $complete.on('click',async()=>{
-                    if (!await confirm('Complete this appointment? All OPD steps must be finished.')) return;
-                    $complete.prop('disabled',true);
-                    try { await this.mutate('complete_appointment',{visit:id,expected_version:visit.revision}); d.hide(); frappe.show_alert({message:'Appointment completed',indicator:'green'}); }
-                    finally { $complete.prop('disabled',false); }
+                    d.hide();await this.openCheckout(id);
                 });
             }
 
@@ -476,7 +562,10 @@ frappe.provide('mobile_app');
             const load=async (selected,append=false)=>{
                 const request=++serial;tab=selected;if(!append)offset=0;
                 $body.find('[data-patient-tab]').removeClass('active').attr('aria-pressed','false').filter(`[data-patient-tab="${tab}"]`).addClass('active').attr('aria-pressed','true');
-                const area=$body.find('.opd-patient-records');if(!append)area.html('<p>Loading records...</p>');
+                $body.find('.opd-checkout-details').toggle(tab==='checkout');
+                const area=$body.find('.opd-patient-records').toggle(tab!=='checkout');
+                if(tab==='checkout')return;
+                if(!append)area.html('<p>Loading records...</p>');
                 area.find('[data-patient-more]').prop('disabled',true);
                 try{
                     const result=await read('patient_records',{clinic,visit:id,tab,offset});if(request!==serial)return;
@@ -489,7 +578,7 @@ frappe.provide('mobile_app');
             };
             $body.on('click','[data-patient-tab]',event=>load(event.currentTarget.dataset.patientTab));
             $body.on('click','[data-patient-more]',()=>load(tab,true));
-            d.$wrapper.on('hidden.bs.modal',()=>{serial++;});d.show();await load('invoice');
+            d.$wrapper.on('hidden.bs.modal',()=>{serial++;});d.show();await load(checkout?'checkout':'invoice');
         }
         async manageVisit(id){
             const visit=await read('get_visit',{clinic:this.clinic,visit:id});
@@ -545,8 +634,8 @@ frappe.provide('mobile_app');
             if(this.busy)return;
             this.$root.find('.opd-branch-menu').prop('open',false);
             try{
-                if(['queue','room','setup','calendar','tv','refresh'].includes(action)&&this.dirty&&!await confirm('Discard unsaved OPD setup changes?'))return;
-                if(['queue','room','setup'].includes(action)){this.selectedRoom=null;if(this.host && frappe.get_route()[1]==='room')frappe.set_route('doctor-clinical');this.section=action;this.dirty=false;this.shell();await this.refresh();return;}
+                if(['queue','checkout','room','setup','calendar','tv','refresh'].includes(action)&&this.dirty&&!await confirm('Discard unsaved OPD setup changes?'))return;
+                if(['queue','checkout','room','setup'].includes(action)){this.selectedRoom=null;if(this.host && frappe.get_route()[1]==='room')frappe.set_route('doctor-clinical');this.section=action;this.dirty=false;this.shell();await this.refresh();return;}
                 if(action==='queue-prev'||action==='queue-next'){this.queueOffset=Math.max(0,(this.queueOffset||0)+(action==='queue-next'?1:-1)*(this.data.daily?.page_length||100));await this.refresh();return;}
                 if(action==='calendar'){if(this.host)this.host.switchSection('calendar');else frappe.set_route('doctor-clinical');return;}
                 if(action==='tv'){window.open('/app/opd-display?clinic='+encodeURIComponent(this.clinic),'_blank','noopener');return;}
@@ -554,11 +643,11 @@ frappe.provide('mobile_app');
                     const preview=await read('preview_end_day',{clinic:this.clinic,date:this.queueDate});
                     const d=new frappe.ui.Dialog({title:'End day - '+preview.date,fields:[
                         {fieldtype:'HTML',fieldname:'preview'},
-                        {fieldtype:'HTML',options:'<p>End Day closes unfinished visits as Withdrawn and clears them from the live display. Visit history remains available using the queue date selector.</p>'},
+                        {fieldtype:'HTML',options:'<p>End Day closes unfinished visits as Withdrawn. Patients remain visible in Daily visits for their visit date, with their final status. Room sessions are closed.</p>'},
                         {...reasonField}
                     ],primary_action_label:'Confirm end day',primary_action:async values=>{
                         d.disable_primary_action();
-                        try{this.queueHistory=false;this.queueOffset=0;const result=await this.mutate('end_day',{date:preview.date,expected_sequence:preview.sequence,reason:values.reason,close_visits:1});d.hide();frappe.show_alert(`${result.closed_rooms.length} room sessions closed; ${result.closed_visits.length} visits withdrawn.`);}
+                        try{this.queueStatus="";this.queueOffset=0;const result=await this.mutate('end_day',{date:preview.date,expected_sequence:preview.sequence,reason:values.reason,close_visits:1});d.hide();frappe.show_alert(`${result.closed_rooms.length} room sessions closed; ${result.closed_visits.length} visits withdrawn.`);}
                         finally{d.enable_primary_action();}
                     }});
                     d.fields_dict.preview.$wrapper.html(`<p>${preview.rooms.length} empty room sessions will close. Closing unfinished visits also releases their called/in-progress patients and closes those room sessions.</p><p>${preview.visits.length} unfinished visits through this date:</p><div style="max-height:260px;overflow:auto">${preview.visits.map(v=>`<p><b>${esc(v.token)}</b> - ${esc(v.patient_name)} - ${esc(v.visit_date)} - ${esc(v.stages[v.stage_index].state)}</p>`).join('')||'<p>None</p>'}</div>${preview.blocked.length?'<div class="opd-notice">Called/in-progress patients will be released automatically when you close unfinished visits. Their treatment will not be marked completed.</div>':''}`);
@@ -611,6 +700,7 @@ frappe.provide('mobile_app');
                     render();d.show();return;
                 }
                 if(action==='visit'){await this.openVisit(button.attr('data-id'));return;}
+                if(action==='checkout-patient'){await this.openCheckout(button.attr('data-id'));return;}
                 if(action==='print'){receipt(await read('get_visit',{clinic:this.clinic,visit:button.attr('data-id')}),this.data.rooms);return;}
                 if(action==='back-rooms'){this.selectedRoom=null;if(this.host)frappe.set_route('doctor-clinical');this.renderRoom();return;}
                 if(action==='open-room'){

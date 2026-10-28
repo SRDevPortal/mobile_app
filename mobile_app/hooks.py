@@ -300,11 +300,17 @@ permission_query_conditions = {
 
 # Appointment operations status is maintained independently of clinical/billing status.
 doc_events = {
+    "Clinic Appointment": {
+        "before_validate": "mobile_app.api.appointment_calendar.normalize_clinic_appointment_status",
+        "before_update_after_submit": "mobile_app.api.appointment_calendar.normalize_clinic_appointment_status",
+    },
     "Diet Chart": {
         "validate": "mobile_app.diet_chart_setup.validate_pdf",
     },
     "Patient Encounter": {
-        "before_validate": "mobile_app.api.appointment_calendar.sync_encounter_status",
+        "before_validate": ["mobile_app.api.appointment_calendar.sync_encounter_status",
+                            "mobile_app.api.appointment_calendar.protect_reschedule_date"],
+        "before_update_after_submit": "mobile_app.api.appointment_calendar.protect_reschedule_date",
         "on_cancel": "mobile_app.api.appointment_calendar.sync_encounter_status",
     }
 }
@@ -325,7 +331,10 @@ for _message_doctype in ("Support Ticket Message", "App Support Ticket Message")
     doc_events.setdefault(_message_doctype, {})["after_insert"] = "mobile_app.realtime.touch_support_ticket"
 
 
-doc_events.setdefault("Clinic Appointment", {})["before_validate"] = "mobile_app.api.opd_queue.preserve_clinic_progress"
+doc_events.setdefault("Clinic Appointment", {})["before_validate"] = [
+    "mobile_app.api.opd_queue.preserve_clinic_progress",
+    "mobile_app.api.appointment_calendar.normalize_clinic_appointment_status",
+]
 
 doc_events.setdefault("Healthcare Settings", {})["validate"] = "mobile_app.opd_store.protect_settings"
 doc_events.setdefault("Mobile Appointment Workflow", {})["validate"] = "mobile_app.opd_store.protect_workflow"
