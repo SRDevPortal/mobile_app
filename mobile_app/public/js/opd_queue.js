@@ -581,15 +581,32 @@ frappe.provide('mobile_app');
             d.$wrapper.on('hidden.bs.modal',()=>{serial++;});d.show();await load(checkout?'checkout':'invoice');
         }
         async manageVisit(id){
-            const visit=await read('get_visit',{clinic:this.clinic,visit:id});
+            const overview=await read('patient_overview',{clinic:this.clinic,visit:id});
+            const visit=overview.visit;
+            const patientFields=overview.patient?.fields||[];
+            const patientValue=label=>patientFields.find(f=>f.label===label)?.value;
+            const sex=patientValue('Sex')||patientValue('Gender');
+            const dob=patientValue('Date of Birth')||patientValue('DOB');
+            const age=dob&&moment(dob).isValid()?moment().diff(moment(dob),'years'):null;
             const d=new frappe.ui.Dialog({title:`Token ${visit.token} - ${visit.patient_name}`,size:'large',fields:[{fieldname:'detail',fieldtype:'HTML'}]});
             const current=visit.stages[visit.stage_index];
-            d.fields_dict.detail.$wrapper.html(`<p>${esc(visit.route_name || visit.department || '')} &middot; Doctor: ${esc(visit.consultation_doctor_name || visit.consultation_doctor)}</p><table class="opd-table"><thead><tr><th>Stage</th><th>OPD</th><th>Status</th></tr></thead><tbody>${visit.stages.map(s=>`<tr><td>${esc(s.stage)}</td><td>${esc(roomLabel(this.data.rooms,s.room))}</td><td>${esc(s.state)}</td></tr>`).join('')}</tbody></table>
-                <div class="opd-actions" style="margin-top:20px">${btn('patient','Open patient record')}${visit.encounter?btn('encounter','Open encounter'):(frappe.model.can_create('Patient Encounter')?btn('new-encounter','New clinical encounter'):'')}${this.data.reception&&visit.status==='Active'?btn('reroute','Change route / doctor')+btn('priority',visit.priority?'Remove priority':'Mark priority')+(current.state==='On Hold'?btn('requeue','Return to queue'):'')+btn('withdraw','Withdraw visit'):''}</div>`);
+            const canManage=this.data.reception&&visit.status==='Active';
+            const icon=name=>frappe.utils.icon(name,'sm');
+            const actionButton=(action,label,symbol,extra='')=>`<button type="button" class="opd-manage-action ${extra}" data-opd="${action}">${icon(symbol)}<span>${esc(label)}</span></button>`;
+            d.$wrapper.addClass('opd-manage-dialog');
+            d.$wrapper.find('.modal-title').html(`<span class="opd-manage-identity"><strong class="opd-manage-name">${esc(visit.patient_name)}</strong><span class="opd-manage-demographics">UHID: ${esc(visit.patient)}${sex?' &bull; '+esc(sex):''}${age!=null?' &bull; '+age+' Yrs':''}</span></span><span class="opd-manage-token">TOKEN ${esc(visit.token)}</span>`);
+            d.fields_dict.detail.$wrapper.html(`<section class="opd-manage-section"><div class="opd-manage-heading"><h3>Visit workflow &amp; OPD stations</h3></div><div class="opd-manage-stages">${visit.stages.map((stage,index)=>`<div class="opd-manage-stage" data-state="${esc(stage.state)}"><span class="opd-manage-stage-icon">${icon(stage.stage==='Vitals'?'heart':stage.stage==='Medical History'?'file':'users')}</span><div class="opd-manage-stage-label"><strong>${esc(stage.stage)}</strong><span class="opd-manage-location"><span class="opd-manage-location-icon" aria-hidden="true">${icon('map')}</span><span class="opd-manage-location-text">${esc(roomLabel(this.data.rooms,stage.room))}</span></span></div>${canManage&&index===visit.stage_index&&stage.state==='On Hold'?`<button type="button" class="opd-manage-state" data-opd="requeue" title="Return this patient to the queue">${icon('primitive-dot')}${esc(stage.state)}</button>`:`<span class="opd-manage-state">${icon('primitive-dot')}${esc(stage.state)}</span>`}</div>`).join('')}</div></section>
+                <section class="opd-manage-section"><h3>Primary actions</h3><div class="opd-manage-primary">${actionButton('patient','Open Patient Record','folder-open','patient')}${visit.encounter?actionButton('encounter','Open Encounter','clipboard','encounter'):(frappe.model.can_create('Patient Encounter')?actionButton('new-encounter','New Clinical Encounter','clipboard','encounter'):'')}</div></section>
+                ${canManage?`<section class="opd-manage-section"><h3>Queue controls</h3><div class="opd-manage-controls">${actionButton('reroute','Change Route / Doctor','change')}${actionButton('priority',visit.priority?'Remove Priority':'Mark Priority','star')}${current.state==='On Hold'?actionButton('requeue','Return to Queue','reply'):''}${actionButton('withdraw','Withdraw Visit','remove','withdraw')}</div></section>`:''}`);
             d.fields_dict.detail.$wrapper.on('click','[data-opd]',async e=>{
                 const action=$(e.currentTarget).attr('data-opd');
                 if(action==='new-encounter'){d.hide();frappe.new_doc('Patient Encounter',{patient:visit.patient,practitioner:visit.consultation_doctor,medical_department:visit.department});return;}
-                if(action==='patient'||action==='encounter'){d.hide();frappe.set_route('Form',action==='patient'?'Patient':'Patient Encounter',action==='patient'?visit.patient:visit.encounter);return;}
+                if(action==='patient'||action==='encounter'){
+                    const doctype=action==='patient'?'patient':'patient-encounter';
+                    const name=action==='patient'?visit.patient:visit.encounter;
+                    window.open('/app/'+doctype+'/'+encodeURIComponent(name),'_blank','noopener,noreferrer');
+                    return;
+                }
                 let fields=[reasonField];
                 if(action==='reroute'){
                     const setup=await read('get_setup',{clinic:this.clinic});

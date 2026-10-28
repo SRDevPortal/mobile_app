@@ -1,16 +1,14 @@
-# Waiting-room display QA
-
-Source visual truth: user-provided waiting-room screenshot (1344 ? 735 pixels).
-Target viewport: 1344 ? 735 CSS pixels, density 1.
-State: two active calls, live queue; simulation controls excluded by request.
-Implementation screenshot: unavailable.
-
-Implemented typography, pale blue-gray background, green stage badges, two-column white cards, rounded borders, spacing, token hierarchy and responsive single-column layout. Existing live data, branch selection, refresh, sound and fullscreen handlers retained. No raster assets required by the reference. No simulation controls exist in the display source.
-
-Validation: JavaScript syntax and git whitespace checks passed. Full-view and focused-region visual comparisons, runtime interactions and browser console checks remain blocked: installed Chromium cannot launch because libnspr4.so is missing. No visual fidelity pass claimed.
-
-Comparison history: initial implementation complete; browser capture blocked before comparison.
-
-Implementation checklist: capture live display at target viewport; inspect typography, spacing, colors, empty state and multiple calls; test branch selection, refresh, sound and fullscreen.
-
+# Manage Visit design QA
 final result: blocked
+
+Source visual: user-provided Manage Visit reference (667 × 643 pixels).
+Implementation: mobile_app/public/js/opd_queue.js and mobile_app/public/css/opd_queue.css.
+Implementation screenshot: unavailable. No browser tool is exposed in this session.
+Viewport/state: reference shows an active visit, first stage On Hold, two later stages Not Ready.
+Visual comparison and browser interaction checks remain blocked; no fidelity pass is claimed.
+
+Implemented scope: patient header, existing icon library, bordered workflow cards, state colours, primary action pair, queue controls, responsive layout.
+Intentional differences: demographics are omitted because get_visit does not return them; arbitrary stage toggling is not added. The current On Hold badge uses the existing requeue action and reason prompt.
+Validation: JavaScript syntax and diff checks. No real patient state was changed.
+
+Remaining checks: open Manage Visit at desktop and narrow mobile sizes, compare typography/spacing/colours/icons to the reference, verify close/focus and action prompts, inspect console errors.

@@ -256,3 +256,75 @@
 
 .opd-checkout-drawer .opd-drawer-footer .btn-primary{white-space:nowrap}
 @media(max-width:600px){.opd-checkout-drawer .opd-drawer-footer{grid-template-columns:repeat(3,minmax(0,1fr))}.opd-checkout-drawer .opd-drawer-footer .btn-primary{grid-column:1/-1;font-size:11px;padding-inline:6px}}
+
+/* Manage Visit: scoped patient workflow dialog. */
+.opd-manage-dialog .modal-dialog{max-width:668px;width:calc(100% - 32px)}
+.opd-manage-dialog .modal-content{border:0;border-radius:16px;overflow:hidden;background:#fff;color:#1e293b}
+.opd-manage-dialog .modal-header{padding:18px 24px 20px;background:#062e25;border-bottom:0;align-items:center}
+.opd-manage-dialog .modal-title{display:flex;align-items:center;justify-content:space-between;gap:18px;width:100%;min-width:0;line-height:1.4}
+.opd-manage-dialog .modal-header .title-section{flex:1;min-width:0}
+.opd-manage-identity{min-width:0;flex:1}
+.opd-manage-dialog .modal-header .modal-actions{flex-shrink:0;margin-left:12px}
+.opd-manage-dialog .modal-header .btn-modal-close{display:inline-flex!important;align-items:center;justify-content:center;width:32px;height:32px;padding:6px;margin:0;border:1px solid #518479;border-radius:6px;background:#16483d;color:#fff;opacity:1;--icon-stroke:#fff}
+.opd-manage-dialog .modal-header .btn-modal-close .icon{width:18px;height:18px;stroke:#fff;--icon-stroke:#fff}
+.opd-manage-dialog .modal-header .btn-modal-close:hover{background:#236052}
+.opd-manage-dialog .modal-header .btn-modal-close:focus-visible{outline:2px solid #99f6e4;outline-offset:3px}
+.opd-manage-token{display:inline-block;flex-shrink:0;padding:4px 8px;border:0;border-radius:3px;background:#087f7c;color:#fff;font-size:11px;line-height:14px;font-weight:700;white-space:nowrap}
+.opd-manage-name{display:block;margin:0 0 5px;font-size:21px;line-height:1.3;color:#fff;overflow-wrap:anywhere}
+.opd-manage-meta{display:flex;flex-wrap:wrap;gap:8px;font-size:12px;font-weight:400;color:#64748b}
+.opd-manage-meta>span{display:flex;align-items:center;gap:6px;border:1px solid #dce4ef;background:#fff;border-radius:6px;padding:4px 10px}
+.opd-manage-meta b{color:#273449;font-weight:600}
+.opd-manage-meta .icon{color:#0d9488;stroke:currentColor}
+.opd-manage-dialog .modal-body{padding:24px}
+.opd-manage-dialog .form-section,.opd-manage-dialog .form-column{padding:0!important;margin:0!important}
+.opd-manage-dialog .form-section{border:0}
+.opd-manage-dialog .form-layout,.opd-manage-dialog .frappe-control{margin-bottom:0}
+.opd-manage-section+.opd-manage-section{margin-top:24px}
+.opd-manage-section h3{margin:0 0 10px;color:#8294ae;font-size:12px;font-weight:700;line-height:18px;letter-spacing:.3px;text-transform:uppercase}
+.opd-manage-stages{display:grid;gap:10px}
+.opd-manage-stage{display:flex;align-items:center;gap:12px;min-height:66px;padding:12px 14px;border:1px solid #dce4ef;border-radius:12px;background:#fafbfd}
+.opd-manage-stage-icon{display:flex;align-items:center;justify-content:center;flex:0 0 36px;height:36px;border:1px solid #dce4ef;border-radius:9px;background:#f1f5f9;color:#4c607b}
+.opd-manage-stage-label{flex:1;min-width:0}
+.opd-manage-stage-label strong{display:block;font-size:14px;line-height:20px;font-weight:700}
+.opd-manage-stage-label small{display:flex;align-items:center;gap:4px;font-size:12px;color:#71829d}
+.opd-manage-stage-label small .icon{width:12px;height:12px}
+.opd-manage-state{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;padding:6px 10px;border:1px solid #cbd8e9;border-radius:8px;background:#f1f5f9;font-size:12px;font-weight:600;color:#53657e;line-height:17px}
+.opd-manage-state .icon{width:9px;height:9px}
+.opd-manage-stage[data-state="On Hold"]{border-color:#f9dc71;background:#fffdf5}
+.opd-manage-stage[data-state="On Hold"] .opd-manage-stage-icon{border-color:transparent;background:#fff3c4;color:#ad650c}
+.opd-manage-stage[data-state="On Hold"] .opd-manage-state{border-color:#f9ce54;background:#fff3c4;color:#92400e}
+.opd-manage-stage[data-state="Completed"] .opd-manage-state{border-color:#99e4d2;background:#ecfdf5;color:#047857}
+.opd-manage-primary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.opd-manage-action{display:flex;align-items:center;justify-content:center;gap:8px;padding:10px 12px;border:1px solid #dce4ef;border-radius:12px;background:#fff;color:#40516b;font-size:12px;font-weight:600;line-height:16px;transition:background .15s}
+.opd-manage-action .icon,.opd-manage-stage .icon{stroke:currentColor}
+.opd-manage-primary .opd-manage-action{min-height:41px;border:0;color:#fff;font-size:14px}
+.opd-manage-primary .patient{background:#0d9488}
+.opd-manage-primary .encounter{background:#1e293b}
+.opd-manage-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+.opd-manage-controls .opd-manage-action{flex-direction:column;min-height:80px;padding:12px 18px}
+.opd-manage-controls .withdraw{border-color:#fecdd3;background:#fff8f9;color:#e11d48}
+.opd-manage-action:hover{filter:brightness(.97)}
+.opd-manage-action:focus-visible,.opd-manage-state:focus-visible{outline:2px solid #0d9488;outline-offset:3px}
+@media(max-width:480px){.opd-manage-dialog .modal-header,.opd-manage-dialog .modal-body{padding:18px}.opd-manage-primary{grid-template-columns:1fr}.opd-manage-controls{grid-template-columns:repeat(2,minmax(0,1fr))}.opd-manage-stage{gap:8px;padding:10px}.opd-manage-state{padding:5px 6px}}
+
+/* Keep primary-action icons and labels together despite Desk button styles. */
+.opd-manage-dialog .opd-manage-primary .opd-manage-action{display:flex!important;align-items:center;justify-content:center!important;gap:8px;text-align:center;white-space:normal}
+.opd-manage-dialog .opd-manage-primary .opd-manage-action>span{flex:0 1 auto;width:auto;margin:0;text-align:center}
+.opd-manage-dialog .opd-manage-primary .opd-manage-action>.icon{flex:0 0 16px;width:16px;height:16px;margin:0;color:#fff;stroke:#fff;--icon-stroke:#fff;--icon-fill:transparent}
+.opd-manage-demographics{display:block;margin:0;color:#8ff5ef;font-size:12px;font-weight:400;line-height:18px;overflow-wrap:anywhere}
+
+/* Fixed icon / text / status tracks keep all workflow cards aligned. */
+.opd-manage-dialog .opd-manage-stage{display:grid;grid-template-columns:36px minmax(0,1fr) max-content;align-items:center;gap:12px;text-align:left}
+.opd-manage-dialog .opd-manage-stage-icon{width:36px;height:36px;margin:0}
+.opd-manage-dialog .opd-manage-stage-label{text-align:left;margin:0}
+.opd-manage-dialog .opd-manage-stage-label strong{margin:0;text-align:left}
+.opd-manage-dialog .opd-manage-stage-label small{justify-content:flex-start;margin:0;line-height:18px}
+.opd-manage-dialog .opd-manage-state{justify-self:end;justify-content:center;width:auto;margin:0;white-space:nowrap}
+@media(max-width:480px){.opd-manage-dialog .modal-title{gap:10px}.opd-manage-name{font-size:19px}.opd-manage-dialog .opd-manage-stage{gap:10px}}
+
+/* Keep the location icon and OPD text as a compact line below the stage name. */
+.opd-manage-dialog .opd-manage-stage-label{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0}
+.opd-manage-dialog .opd-manage-stage-label>.opd-manage-location{display:inline-flex!important;flex:0 0 auto;align-items:center;justify-content:flex-start!important;gap:4px;width:auto!important;max-width:100%;margin:0;padding:0;text-align:left;font-size:12px;font-weight:400;line-height:18px;color:#71829d}
+.opd-manage-dialog .opd-manage-location>.opd-manage-location-icon{display:inline-flex;flex:0 0 12px;align-items:center;justify-content:center;width:12px;height:12px;margin:0;padding:0}
+.opd-manage-dialog .opd-manage-location-icon .icon{display:block;flex:none;width:12px;height:12px;margin:0;--icon-stroke:#71829d;stroke:currentColor}
+.opd-manage-dialog .opd-manage-location>.opd-manage-location-text{display:inline;flex:0 1 auto;width:auto;margin:0;padding:0;text-align:left}
