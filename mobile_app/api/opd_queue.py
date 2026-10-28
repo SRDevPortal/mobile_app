@@ -1259,13 +1259,15 @@ def checkout_details(clinic, visit):
     if not _checkout_ready(current):
         frappe.throw("Finish all required OPD steps before checkout.")
     doc = _checkout_encounter(current)
+    from mobile_app.encounter_checkout_gate import is_ready
     modified = str(doc.modified)
     checked = current.get("checkout_checklist") or []
     if current.get("checkout_encounter_modified") != modified:
         checked = []
     return {"visit": _visit_data(current), "encounter": doc.name, "modified": modified,
             "modified_by": doc.modified_by, "documents": _checkout_documents(doc),
-            "checked": checked, "completed_at": current.get("checkout_completed_at")}
+            "checked": checked, "completed_at": current.get("checkout_completed_at"),
+            "manual_save_ready": is_ready(current, doc)}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -1287,6 +1289,9 @@ def save_checkout(clinic, request_id, visit, expected_version, encounter_modifie
     current.checkout_reviewed_by = frappe.session.user
     current.checkout_reviewed_at = now_datetime()
     if cint(complete):
+        from mobile_app.encounter_checkout_gate import is_ready
+        if not is_ready(current, doc):
+            frappe.throw("Save the Patient Encounter manually after route completion before completing checkout.")
         if doc.docstatus == 0:
             doc.check_permission("submit")
             doc.submit()

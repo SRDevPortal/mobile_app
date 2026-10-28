@@ -10,6 +10,7 @@ from mobile_app.api import opd_queue as api
 class TestCheckout(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack(); self.addCleanup(self.stack.close)
+        self.manual_ready = self.stack.enter_context(patch("mobile_app.encounter_checkout_gate.is_ready", return_value=True))
         self.stack.enter_context(patch.object(frappe, "throw", side_effect=frappe.ValidationError))
         self.stack.enter_context(patch.object(api, "_checkout_access"))
         self.stack.enter_context(patch.object(api, "_version"))
@@ -77,3 +78,10 @@ class TestCheckout(unittest.TestCase):
         self.visit.checkout_completed_at="done"
         with self.assertRaises(frappe.ValidationError):self.run_checkout()
         self.doc.submit.assert_not_called()
+
+    def test_checkout_requires_manual_encounter_save(self):
+        self.manual_ready.return_value = False
+        with self.assertRaises(frappe.ValidationError):
+            self.run_checkout()
+        self.doc.submit.assert_not_called()
+        self.save.assert_not_called()

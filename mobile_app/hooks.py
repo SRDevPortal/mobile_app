@@ -341,3 +341,6 @@ doc_events.setdefault("Mobile Appointment Workflow", {})["validate"] = "mobile_a
 
 # Durable token outbox and delivery reconciliation.
 scheduler_events = {"cron": {"* * * * *": ["mobile_app.token_notifications.process_pending"]}}
+
+# Manual encounter finalization after OPD route completion.
+doc_events["Patient Encounter"]["on_update"] = "mobile_app.encounter_checkout_gate.on_update"

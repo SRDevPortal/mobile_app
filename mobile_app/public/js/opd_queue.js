@@ -444,6 +444,15 @@ frappe.provide('mobile_app');
             const completeButton=$('<button type="button" class="btn btn-primary">Complete Check Out & Submit Encounter</button>').appendTo(footer);
             area.html(`<header class="opd-checkout-heading"><strong>Current encounter: ${esc(data.encounter)}</strong><span>Last updated: ${esc(moment(data.modified).format("D MMM YYYY, h:mm A"))} by ${esc(data.modified_by)}</span></header><p class="opd-checkout-instruction">Select the details to preview, then click Print.</p><div class="opd-checkout-options">${data.documents.map(item=>`<section class="opd-checkout-option"><label><input type="checkbox" data-checkout-select="${esc(item.id)}" checked><span>${esc(item.label)}</span></label></section>`).join('')||'<p>No prescription, tests, care instructions or doctor notes are recorded in this encounter. Review the encounter before completing.</p>'}</div><p class="opd-checkout-completion-note">Complete Check Out submits the encounter and completes the appointment.</p>`);
             dialog.$wrapper.addClass('opd-checkout-drawer');
+            if(!data.manual_save_ready){
+                const notice=$('<div class="opd-read-note" role="status"><p>Waiting for the doctor to manually save the Patient Encounter after route completion.</p><button type="button" class="opd-btn">Refresh after saving</button></div>').prependTo(area);
+                notice.find('button').on('click',async()=>{
+                    const latest=await read('checkout_details',{clinic,visit:id});
+                    completeButton.remove();
+                    this.mountCheckout(dialog,area,footer,latest,clinic,id);
+                });
+            }
+
             const textValue=field=>esc(field?.type==='Text Editor'?new DOMParser().parseFromString(String(field.value||''),'text/html').body.textContent:String(field?.value??''));
             const medicationTitles={drug_prescription:'Ayurvedic Medications',sr_homeopathy_drug_prescription:'Homeopathy Medications',sr_allopathy_drug_prescription:'Allopathy Medications'};
             const fieldsHTML=fields=>fields.map(field=>{
@@ -481,17 +490,18 @@ frappe.provide('mobile_app');
                         if(serial!==previewSerial)return;
                         await frame.contentDocument?.fonts?.ready;
                         if(serial!==previewSerial)return;
-                        ready=true;printButton.prop('disabled',false);preview.find('[role="status"]').text('');
+                        ready=true;printButton.prop('disabled',!data.manual_save_ready);preview.find('[role="status"]').text(data.manual_save_ready?'':'Save the encounter manually, then click Refresh after saving to enable printing.');
                     };
                     frame.srcdoc='<!doctype html>'+html.documentElement.outerHTML;frame.hidden=false;
                 }catch(error){if(serial===previewSerial){preview.find('[role="status"]').text('Unable to load preview. Retry or reopen checkout if the encounter changed.');preview.find('[data-retry-preview]').prop('hidden',false);}}
             };
-            area.on('change','[data-checkout-select]',updatePreview);
+            area.off('change.opdCheckout').on('change.opdCheckout','[data-checkout-select]',updatePreview);
             preview.on('click','[data-retry-preview]',updatePreview);
-            printButton.on('click',()=>{if(ready){frame.contentWindow.focus();frame.contentWindow.print();}});
+            printButton.on('click',()=>{if(ready&&data.manual_save_ready&&!printButton.prop('disabled')){frame.contentWindow.focus();frame.contentWindow.print();}});
             dialog.$wrapper.on('hidden.bs.modal',()=>{previewSerial++;ready=false;frame.onload=null;});
             updatePreview();
             const save=async complete=>{
+                if(complete && (data.completed_at || !data.manual_save_ready || completeButton.prop('disabled')))return;
                 if(complete&&!await confirm('Submit this Patient Encounter and complete checkout? This can create clinical orders and billing records.'))return;
                 const checked=selectedSections();
                 completeButton.prop('disabled',true);area.find('button').prop('disabled',true);
@@ -499,9 +509,9 @@ frappe.provide('mobile_app');
                     await write('save_checkout',{clinic,visit:id,expected_version:data.visit.revision,encounter_modified:data.modified,checked,complete:complete?1:0});
                     dialog.hide();await this.refresh();
                     frappe.show_alert({message:complete?'Encounter submitted and checkout completed':'Checkout checklist saved',indicator:'green'});
-                }finally{completeButton.prop('disabled',!!data.completed_at);area.find('button').prop('disabled',false);}
+                }finally{completeButton.prop('disabled',!!data.completed_at||!data.manual_save_ready);area.find('button').prop('disabled',false);}
             };
-            completeButton.on('click',()=>save(true)).prop('disabled',!!data.completed_at);
+            completeButton.on('click',()=>save(true)).prop('disabled',!!data.completed_at||!data.manual_save_ready);
         }
         async openVisit(id, checkout=false){
             const clinic=this.clinic;
@@ -541,7 +551,17 @@ frappe.provide('mobile_app');
             const $footer=$('<footer class="opd-drawer-footer"><button type="button" class="opd-drawer-dismiss">Close</button><button type="button" class="opd-drawer-print">Print Token Ticket</button></footer>');
             d.$wrapper.find('.modal-content').append($footer);
             $footer.on('click','.opd-drawer-dismiss',()=>d.hide());
-            if(!checkout)$footer.on('click','.opd-drawer-print',()=>{d.hide();receipt(visit,rooms);});
+            if(!checkout && this.section==='room'){
+                const encounter=visit.encounter||(visit.source_doctype==='Patient Encounter'?visit.source_name:null);
+                $footer.find('.opd-drawer-print').text('Open Encounter')
+                    .prop('disabled',!encounter)
+                    .attr('title',encounter?'Open encounter in a new tab':'No encounter is linked to this visit');
+                $footer.on('click','.opd-drawer-print',()=>{
+                    if(encounter)window.open('/app/patient-encounter/'+encodeURIComponent(encounter),'_blank','noopener,noreferrer');
+                });
+            }else if(!checkout){
+                $footer.on('click','.opd-drawer-print',()=>{d.hide();receipt(visit,rooms);});
+            }
             if (checkout) {
                 $body.find('.opd-vitals-summary').prev('.opd-drawer-section-title').remove();
                 $body.find('.opd-vitals-summary').remove();

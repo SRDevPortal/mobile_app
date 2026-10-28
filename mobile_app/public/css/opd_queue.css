@@ -328,3 +328,10 @@
 .opd-manage-dialog .opd-manage-location>.opd-manage-location-icon{display:inline-flex;flex:0 0 12px;align-items:center;justify-content:center;width:12px;height:12px;margin:0;padding:0}
 .opd-manage-dialog .opd-manage-location-icon .icon{display:block;flex:none;width:12px;height:12px;margin:0;--icon-stroke:#71829d;stroke:currentColor}
 .opd-manage-dialog .opd-manage-location>.opd-manage-location-text{display:inline;flex:0 1 auto;width:auto;margin:0;padding:0;text-align:left}
+
+/* A locked checkout action must not look clickable. */
+.opd-checkout-drawer .opd-drawer-footer .btn-primary:disabled,
+.opd-checkout-drawer .opd-drawer-footer .opd-drawer-print:disabled{cursor:not-allowed!important;pointer-events:auto;opacity:.5}
+.opd-checkout-drawer .opd-drawer-footer .btn-primary:not(:disabled),
+.opd-checkout-drawer .opd-drawer-footer .opd-drawer-print:not(:disabled),
+.opd-checkout-drawer .opd-drawer-footer .opd-drawer-encounter{cursor:pointer}
