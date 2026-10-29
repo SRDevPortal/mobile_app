@@ -444,6 +444,7 @@ frappe.provide('mobile_app');
             const completeButton=$('<button type="button" class="btn btn-primary">Complete Check Out & Submit Encounter</button>').appendTo(footer);
             area.html(`<header class="opd-checkout-heading"><strong>Current encounter: ${esc(data.encounter)}</strong><span>Last updated: ${esc(moment(data.modified).format("D MMM YYYY, h:mm A"))} by ${esc(data.modified_by)}</span></header><p class="opd-checkout-instruction">Select the details to preview, then click Print.</p><div class="opd-checkout-options">${data.documents.map(item=>`<section class="opd-checkout-option"><label><input type="checkbox" data-checkout-select="${esc(item.id)}" checked><span>${esc(item.label)}</span></label></section>`).join('')||'<p>No prescription, tests, care instructions or doctor notes are recorded in this encounter. Review the encounter before completing.</p>'}</div><p class="opd-checkout-completion-note">Complete Check Out submits the encounter and completes the appointment.</p>`);
             dialog.$wrapper.addClass('opd-checkout-drawer');
+            if(!data.can_submit_checkout)area.prepend('<p class="opd-read-note" role="status">Your submission permissions do not allow completing this encounter through checkout.</p>');
             if(!data.manual_save_ready){
                 const notice=$('<div class="opd-read-note" role="status"><p>Waiting for the doctor to manually save the Patient Encounter after route completion.</p><button type="button" class="opd-btn">Refresh after saving</button></div>').prependTo(area);
                 notice.find('button').on('click',async()=>{
@@ -501,7 +502,7 @@ frappe.provide('mobile_app');
             dialog.$wrapper.on('hidden.bs.modal',()=>{previewSerial++;ready=false;frame.onload=null;});
             updatePreview();
             const save=async complete=>{
-                if(complete && (data.completed_at || !data.manual_save_ready || completeButton.prop('disabled')))return;
+                if(complete && (data.completed_at || !data.manual_save_ready || !data.can_submit_checkout || completeButton.prop('disabled')))return;
                 if(complete&&!await confirm('Submit this Patient Encounter and complete checkout? This can create clinical orders and billing records.'))return;
                 const checked=selectedSections();
                 completeButton.prop('disabled',true);area.find('button').prop('disabled',true);
@@ -509,9 +510,9 @@ frappe.provide('mobile_app');
                     await write('save_checkout',{clinic,visit:id,expected_version:data.visit.revision,encounter_modified:data.modified,checked,complete:complete?1:0});
                     dialog.hide();await this.refresh();
                     frappe.show_alert({message:complete?'Encounter submitted and checkout completed':'Checkout checklist saved',indicator:'green'});
-                }finally{completeButton.prop('disabled',!!data.completed_at||!data.manual_save_ready);area.find('button').prop('disabled',false);}
+                }finally{completeButton.prop('disabled',!!data.completed_at||!data.manual_save_ready||!data.can_submit_checkout);area.find('button').prop('disabled',false);}
             };
-            completeButton.on('click',()=>save(true)).prop('disabled',!!data.completed_at||!data.manual_save_ready);
+            completeButton.on('click',()=>save(true)).prop('disabled',!!data.completed_at||!data.manual_save_ready||!data.can_submit_checkout);
         }
         async openVisit(id, checkout=false){
             const clinic=this.clinic;

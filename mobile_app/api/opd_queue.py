@@ -1252,6 +1252,10 @@ def checkout_list(clinic):
                       for room in store.records("Room", {"clinic": clinic})]}
 
 
+def _checkout_submission_allowed(doc):
+    return frappe.has_permission("Patient Encounter", "submit", doc=doc)
+
+
 @frappe.whitelist()
 def checkout_details(clinic, visit):
     _access(clinic); _checkout_access()
@@ -1267,7 +1271,8 @@ def checkout_details(clinic, visit):
     return {"visit": _visit_data(current), "encounter": doc.name, "modified": modified,
             "modified_by": doc.modified_by, "documents": _checkout_documents(doc),
             "checked": checked, "completed_at": current.get("checkout_completed_at"),
-            "manual_save_ready": is_ready(current, doc)}
+            "manual_save_ready": is_ready(current, doc),
+            "can_submit_checkout": _checkout_submission_allowed(doc)}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -1292,9 +1297,16 @@ def save_checkout(clinic, request_id, visit, expected_version, encounter_modifie
         from mobile_app.encounter_checkout_gate import is_ready
         if not is_ready(current, doc):
             frappe.throw("Save the Patient Encounter manually after route completion before completing checkout.")
+        if not _checkout_submission_allowed(doc):
+            frappe.throw("You are not allowed to submit this encounter through checkout.", frappe.PermissionError)
         if doc.docstatus == 0:
             doc.check_permission("submit")
-            doc.submit()
+            previous_action = getattr(frappe.flags, "encounter_submission_action", None)
+            frappe.flags.encounter_submission_action = "checkout_submit"
+            try:
+                doc.submit()
+            finally:
+                frappe.flags.encounter_submission_action = previous_action
         from mobile_app.api import appointment_calendar as cal
         if current.source_doctype:
             source = cal._source(current.source_doctype, current.source_name, lock=True)
